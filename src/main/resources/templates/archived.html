@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout}">
+<head>
+    <title>Archived Records</title>
+</head>
+<body>
+<div layout:fragment="content">
+    <!-- Page Header -->
+    <div class="slds-page-header slds-page-header_record-home" style="background: white; margin-bottom: 1rem;">
+        <div class="slds-page-header__row">
+            <div class="slds-page-header__col-title">
+                <div class="slds-page-header__name">
+                    <div class="slds-page-header__title slds-truncate" title="Archived Records">Archived Records</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Object Selector -->
+    <div class="slds-card slds-m-bottom_medium">
+        <div class="slds-card__body slds-card__body_inner">
+            <form action="/archived" method="get" class="slds-form slds-form_horizontal">
+                <div class="slds-form-element">
+                    <label class="slds-form-element__label" for="objectName">Object Type</label>
+                    <div class="slds-form-element__control">
+                        <div class="slds-select_container">
+                            <select id="objectName" name="object" class="slds-select" onchange="this.form.submit()">
+                                <option value="">-- Select Object --</option>
+                                <option th:each="obj : ${objects}" th:value="${obj}" th:text="${obj}"
+                                        th:selected="${obj == selectedObject}">Object</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Archived Records Table -->
+    <div class="slds-card" th:if="${selectedObject != null}">
+        <div class="slds-card__header slds-grid">
+            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                <div class="slds-media__body">
+                    <h2 class="slds-card__header-title">
+                        <span th:text="'Archived ' + ${selectedObject} + ' Records (' + ${records.size()} + ')'">Archived Records</span>
+                    </h2>
+                </div>
+            </header>
+        </div>
+        <div class="slds-card__body">
+            <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped">
+                <thead>
+                    <tr class="slds-line-height_reset">
+                        <th scope="col"><div class="slds-truncate">Name</div></th>
+                        <th scope="col"><div class="slds-truncate">Record ID</div></th>
+                        <th scope="col"><div class="slds-truncate">Archive Period</div></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="record : ${records}" class="slds-hint-parent">
+                        <td><div class="slds-truncate" th:text="${record.name}">Name</div></td>
+                        <td>
+                            <div class="slds-truncate">
+                                <a th:href="@{/record(id=${record.id})}" th:text="${record.id}">ID</a>
+                            </div>
+                        </td>
+                        <td><div class="slds-truncate" th:text="${T(se.devrandom.heimdall.web.RestoreService).formatPeriod(record.period)}">Period</div></td>
+                    </tr>
+                    <tr th:if="${records.isEmpty()}">
+                        <td colspan="3" class="slds-text-align_center slds-p-around_medium">
+                            No archived records found for this object.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <!-- Pagination -->
+        <div class="slds-card__footer" th:if="${totalPages > 1}">
+            <nav class="slds-button-group" role="group">
+                <a th:href="@{/archived(object=${selectedObject}, page=${currentPage - 1})}"
+                   th:classappend="${currentPage == 0} ? 'slds-button_disabled'"
+                   class="slds-button slds-button_neutral">Previous</a>
+                <span class="slds-button slds-button_neutral" th:text="'Page ' + (${currentPage} + 1) + ' of ' + ${totalPages}">Page 1 of 10</span>
+                <a th:href="@{/archived(object=${selectedObject}, page=${currentPage + 1})}"
+                   th:classappend="${currentPage >= totalPages - 1} ? 'slds-button_disabled'"
+                   class="slds-button slds-button_neutral">Next</a>
+            </nav>
+        </div>
+    </div>
+</div>
+</body>
+</html>

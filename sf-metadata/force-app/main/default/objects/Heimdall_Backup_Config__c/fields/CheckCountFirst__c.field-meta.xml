@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>CheckCountFirst__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>If checked, Heimdall will run a COUNT query before Bulk API to check if there are new records. This is automatically enabled after 3 consecutive empty backup runs.</description>
+    <externalId>false</externalId>
+    <label>Check COUNT First</label>
+    <trackTrending>false</trackTrending>
+    <type>Checkbox</type>
+</CustomField>

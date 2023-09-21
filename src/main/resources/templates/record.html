@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout}">
+<head>
+    <title th:text="'Record ' + ${recordId}">Record History</title>
+    <style>
+        .diff-added { background-color: #d4edda; }
+        .diff-removed { background-color: #f8d7da; }
+        .diff-changed { background-color: #fff3cd; }
+        .version-selector {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .version-card {
+            border-left: 4px solid #0176d3;
+            margin-bottom: 0.5rem;
+        }
+        .version-card.selected {
+            border-left-color: #2e844a;
+            background-color: #f3f3f3;
+        }
+        .period-archive {
+            font-style: italic;
+            color: #706e6b;
+        }
+        .slds-badge_success {
+            background-color: #2e844a;
+            color: #fff;
+        }
+        .slds-badge_archive {
+            background-color: #706e6b;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+<div layout:fragment="content">
+    <!-- Page Header -->
+    <div class="slds-page-header slds-page-header_record-home" style="background: white; margin-bottom: 1rem;">
+        <div class="slds-page-header__row">
+            <div class="slds-page-header__col-title">
+                <div class="slds-page-header__name">
+                    <div class="slds-page-header__title slds-truncate">
+                        <span th:text="${objectName}">Object</span>:
+                        <span th:text="${recordName}">Name</span>
+                    </div>
+                    <p class="slds-page-header__name-meta" th:text="'ID: ' + ${recordId}">ID</p>
+                </div>
+            </div>
+            <div class="slds-page-header__col-actions">
+                <span th:if="${recordStatus != null && recordStatus.isActive()}" class="slds-badge slds-badge_success slds-m-right_xx-small">ACTIVE</span>
+                <span th:if="${recordStatus != null && recordStatus.isDeleted()}" class="slds-badge slds-badge_error slds-m-right_xx-small">DELETED</span>
+                <span th:if="${recordStatus != null && recordStatus.isArchived()}" class="slds-badge slds-badge_archive">ARCHIVED</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Not Found Message -->
+    <div class="slds-card" th:if="${versions == null || versions.isEmpty()}">
+        <div class="slds-card__body slds-card__body_inner slds-text-align_center slds-p-around_large">
+            <div class="slds-illustration slds-illustration_small">
+                <svg class="slds-illustration__svg" viewBox="0 0 468 194" aria-hidden="true" style="width: 200px; height: 100px;">
+                    <path d="M234 97c51.915 0 94-42.085 94-94H140c0 51.915 42.085 94 94 94z" fill="#EEF1F6"/>
+                </svg>
+            </div>
+            <h3 class="slds-text-heading_medium slds-m-bottom_small">No Record Found</h3>
+            <p th:text="'No backup data found for record ID: ' + ${recordId}">Message</p>
+        </div>
+    </div>
+
+    <!-- Version Timeline -->
+    <div class="slds-grid slds-gutters" th:if="${versions != null && !versions.isEmpty()}">
+        <!-- Left: Version List -->
+        <div class="slds-col slds-size_1-of-3">
+            <div class="slds-card">
+                <div class="slds-card__header">
+                    <h2 class="slds-card__header-title">Versions (<span th:text="${versions.size()}">0</span>)</h2>
+                </div>
+                <div class="slds-card__body">
+                    <ul class="slds-has-dividers_bottom-space">
+                        <li th:each="version, iter : ${versions}" class="slds-item">
+                            <div class="slds-box slds-box_x-small version-card"
+                                 th:classappend="${iter.index == selectedVersionIndex} ? 'selected'">
+                                <a th:href="@{/record(id=${recordId}, v=${iter.index})}" class="slds-text-link_reset">
+                                    <p class="slds-text-title_bold" th:text="'Version ' + (${versions.size()} - ${iter.index})">Version</p>
+                                    <p class="slds-text-body_small"
+                                       th:classappend="${version.archivePeriod} ? 'period-archive'"
+                                       th:text="${version.formattedPeriod}">Period</p>
+                                    <span th:if="${version.isDeleted}" class="slds-badge slds-badge_error slds-m-top_xx-small">Deleted</span>
+                                </a>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Version Details & Diff -->
+        <div class="slds-col slds-size_2-of-3">
+            <!-- Current Version Details -->
+            <div class="slds-card slds-m-bottom_medium">
+                <div class="slds-card__header slds-grid">
+                    <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                        <div class="slds-media__body">
+                            <h2 class="slds-card__header-title">
+                                <span th:text="'Version ' + (${versions.size()} - ${selectedVersionIndex}) + ' Details'">Version Details</span>
+                            </h2>
+                        </div>
+                    </header>
+                    <div class="slds-no-flex">
+                        <a th:if="${isContentVersion != null && isContentVersion && hasDownloadableFile != null && hasDownloadableFile}"
+                           th:href="@{/api/download-url(id=${recordId})}"
+                           class="slds-button slds-button_neutral slds-m-right_x-small"
+                           target="_blank">
+                            Download File
+                        </a>
+                        <button class="slds-button slds-button_brand restore-btn"
+                                th:data-record-id="${recordId}"
+                                th:data-period="${selectedVersion.period}">
+                            Restore This Version
+                        </button>
+                    </div>
+                </div>
+                <div class="slds-card__body">
+                    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                        <thead>
+                            <tr>
+                                <th scope="col" style="width: 30%"><div class="slds-truncate">Field</div></th>
+                                <th scope="col"><div class="slds-truncate">Value</div></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr th:each="entry : ${selectedVersion.metadata}">
+                                <td class="slds-text-title_bold" th:text="${entry.key}">Field</td>
+                                <td th:text="${entry.value}">Value</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Diff with Previous Version -->
+            <div class="slds-card" th:if="${diff != null && !diff.isEmpty()}">
+                <div class="slds-card__header">
+                    <h2 class="slds-card__header-title">Changes from Previous Version</h2>
+                </div>
+                <div class="slds-card__body">
+                    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                        <thead>
+                            <tr>
+                                <th scope="col" style="width: 25%"><div class="slds-truncate">Field</div></th>
+                                <th scope="col" style="width: 37.5%"><div class="slds-truncate">Previous Value</div></th>
+                                <th scope="col" style="width: 37.5%"><div class="slds-truncate">New Value</div></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr th:each="change : ${diff}" th:classappend="${change.type}">
+                                <td class="slds-text-title_bold" th:text="${change.field}">Field</td>
+                                <td th:text="${change.oldValue}">Old</td>
+                                <td th:text="${change.newValue}">New</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Related Files -->
+            <div class="slds-card slds-m-top_medium" th:if="${relatedFiles != null && !relatedFiles.isEmpty()}">
+                <div class="slds-card__header slds-grid">
+                    <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                        <div class="slds-media__figure">
+                            <span class="slds-icon_container slds-icon-doctype-attachment" title="Files">
+                                <svg class="slds-icon slds-icon_small" aria-hidden="true">
+                                    <use xlink:href="/assets/icons/doctype-sprite/svg/symbols.svg#attachment"></use>
+                                </svg>
+                            </span>
+                        </div>
+                        <div class="slds-media__body">
+                            <h2 class="slds-card__header-title">
+                                Related Files (<span th:text="${relatedFiles.size()}">0</span>)
+                            </h2>
+                        </div>
+                    </header>
+                </div>
+                <div class="slds-card__body">
+                    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                        <thead>
+                            <tr>
+                                <th scope="col"><div class="slds-truncate">File Name</div></th>
+                                <th scope="col" style="width: 10%"><div class="slds-truncate">Type</div></th>
+                                <th scope="col" style="width: 10%"><div class="slds-truncate">Extension</div></th>
+                                <th scope="col" style="width: 12%"><div class="slds-truncate">Size</div></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr th:each="file : ${relatedFiles}">
+                                <td>
+                                    <a th:href="@{/record(id=${file.contentVersionId})}" th:text="${file.name}">File Name</a>
+                                </td>
+                                <td th:text="${file.fileType}">Type</td>
+                                <td th:text="${file.fileExtension}">Ext</td>
+                                <td th:text="${file.formattedSize}">Size</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Related Child Records -->
+            <div th:if="${groupedRelatedRecords != null && !groupedRelatedRecords.isEmpty()}">
+                <div th:each="group : ${groupedRelatedRecords}" class="slds-card slds-m-top_medium">
+                    <div class="slds-card__header">
+                        <h2 class="slds-card__header-title">
+                            <span th:text="${group.key}">ObjectName</span>
+                            (<span th:text="${group.value.size()}">0</span>)
+                        </h2>
+                    </div>
+                    <div class="slds-card__body">
+                        <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                            <thead>
+                                <tr>
+                                    <th scope="col"><div class="slds-truncate">Name</div></th>
+                                    <th scope="col" style="width: 25%"><div class="slds-truncate">Record ID</div></th>
+                                    <th scope="col" style="width: 15%"><div class="slds-truncate">Referencing Field</div></th>
+                                    <th scope="col" style="width: 15%"><div class="slds-truncate">Status</div></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr th:each="rec : ${group.value}">
+                                    <td th:text="${rec.name}">Name</td>
+                                    <td>
+                                        <a th:href="@{/record(id=${rec.id})}" th:text="${rec.id}">ID</a>
+                                    </td>
+                                    <td th:text="${rec.referencingField}">Field</td>
+                                    <td>
+                                        <span th:if="${rec.isActive()}" class="slds-badge slds-badge_success slds-m-right_xx-small">ACTIVE</span>
+                                        <span th:if="${rec.isDeleted()}" class="slds-badge slds-badge_error slds-m-right_xx-small">DELETED</span>
+                                        <span th:if="${rec.isArchived()}" class="slds-badge slds-badge_archive">ARCHIVED</span>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.restore-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var recordId = this.dataset.recordId;
+                    var period = this.dataset.period;
+
+                    if (confirm('Are you sure you want to restore this version of record ' + recordId + '?')) {
+                        fetch('/api/restore', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ recordId: recordId, period: period })
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                alert('Record restored successfully! New ID: ' + data.newId);
+                            } else {
+                                alert('Restore failed: ' + data.error);
+                            }
+                        })
+                        .catch(error => alert('Error: ' + error));
+                    }
+                });
+            });
+        });
+    </script>
+</div>
+</body>
+</html>

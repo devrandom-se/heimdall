@@ -1,0 +1,32 @@
+# JWT Authentication Example (same as bash script)
+# Use this configuration to authenticate with JWT bearer token flow
+
+salesforce.base-url=https://your-instance.my.salesforce.com
+salesforce.grant-type=urn:ietf:params:oauth:grant-type:jwt-bearer
+salesforce.client-id=YOUR_CONNECTED_APP_CLIENT_ID
+salesforce.username=your.username@yourcompany.com
+salesforce.jwt-key-file=/path/to/salesforce-backup.key
+# For production orgs, use https://login.salesforce.com
+# For sandbox orgs, use https://test.salesforce.com
+salesforce.audience-url=https://login.salesforce.com
+salesforce.api-version=v61.0
+salesforce.org-id=YOUR_ORG_ID
+
+spring.codec.max-in-memory-size=20MB
+
+# AWS S3 Configuration
+aws.s3.bucket-name=heimdall-salesforce-backups
+aws.s3.region=eu-north-1
+
+# PostgreSQL Database Configuration (for backup data: csvfiles, objects, relations)
+postgres.backup.url=jdbc:postgresql://localhost:5432/heimdall
+postgres.backup.username=heimdall
+postgres.backup.password=heimdall
+
+# Spring Batch uses HSQLDB (in-memory) for job metadata
+spring.datasource.url=jdbc:hsqldb:mem:testdb
+spring.datasource.driver-class-name=org.hsqldb.jdbc.JDBCDriver
+spring.batch.jdbc.initialize-schema=always
+
+# Spring Batch job execution
+spring.batch.job.enabled=true

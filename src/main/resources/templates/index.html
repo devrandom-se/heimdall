@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout}">
+<head>
+    <title>Dashboard</title>
+</head>
+<body>
+<div layout:fragment="content">
+    <!-- Page Header -->
+    <div class="slds-page-header slds-page-header_record-home" style="background: white; margin-bottom: 1rem;">
+        <div class="slds-page-header__row">
+            <div class="slds-page-header__col-title">
+                <div class="slds-page-header__name">
+                    <div class="slds-page-header__title slds-truncate" title="Dashboard">Dashboard</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Record ID Search -->
+    <div class="slds-card slds-m-bottom_medium">
+        <div class="slds-card__header slds-grid">
+            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                <div class="slds-media__body">
+                    <h2 class="slds-card__header-title">
+                        <span>Search Record by ID</span>
+                    </h2>
+                </div>
+            </header>
+        </div>
+        <div class="slds-card__body slds-card__body_inner">
+            <form action="/record" method="get" class="slds-form slds-form_horizontal">
+                <div class="slds-form-element">
+                    <label class="slds-form-element__label" for="recordId">Record ID</label>
+                    <div class="slds-form-element__control slds-input-has-icon slds-input-has-icon_right">
+                        <input type="text" id="recordId" name="id" class="slds-input"
+                               placeholder="Enter Salesforce Record ID (e.g., 001xxx...)" />
+                    </div>
+                </div>
+                <div class="slds-form-element slds-m-top_small">
+                    <button type="submit" class="slds-button slds-button_brand">View Version History</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Quick Links -->
+    <div class="card-grid">
+        <!-- Deleted Records Card -->
+        <div class="slds-card">
+            <div class="slds-card__header slds-grid">
+                <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                    <div class="slds-media__figure">
+                        <span class="slds-icon_container slds-icon-standard-record_delete" title="Deleted Records">
+                            <svg class="slds-icon slds-icon_small" aria-hidden="true">
+                                <use href="https://unpkg.com/@salesforce-ux/design-system@2.24.3/assets/icons/standard-sprite/svg/symbols.svg#record_delete"></use>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="slds-media__body">
+                        <h2 class="slds-card__header-title">
+                            <a href="/deleted" class="slds-card__header-link">Deleted Records</a>
+                        </h2>
+                    </div>
+                </header>
+            </div>
+            <div class="slds-card__body slds-card__body_inner">
+                <p>Browse and restore deleted Salesforce records.</p>
+            </div>
+            <footer class="slds-card__footer">
+                <a class="slds-card__footer-action" href="/deleted">Browse Deleted Records</a>
+            </footer>
+        </div>
+
+        <!-- Archived Records Card -->
+        <div class="slds-card">
+            <div class="slds-card__header slds-grid">
+                <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                    <div class="slds-media__figure">
+                        <span class="slds-icon_container slds-icon-standard-portal" title="Archived Records">
+                            <svg class="slds-icon slds-icon_small" aria-hidden="true">
+                                <use href="https://unpkg.com/@salesforce-ux/design-system@2.24.3/assets/icons/standard-sprite/svg/symbols.svg#portal"></use>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="slds-media__body">
+                        <h2 class="slds-card__header-title">
+                            <a href="/archived" class="slds-card__header-link">Archived Records</a>
+                        </h2>
+                    </div>
+                </header>
+            </div>
+            <div class="slds-card__body slds-card__body_inner">
+                <p>Browse archived Salesforce records.</p>
+            </div>
+            <footer class="slds-card__footer">
+                <a class="slds-card__footer-action" href="/archived">Browse Archived Records</a>
+            </footer>
+        </div>
+
+        <!-- Object Browser Card -->
+        <div class="slds-card">
+            <div class="slds-card__header slds-grid">
+                <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                    <div class="slds-media__figure">
+                        <span class="slds-icon_container slds-icon-standard-all" title="Objects">
+                            <svg class="slds-icon slds-icon_small" aria-hidden="true">
+                                <use href="https://unpkg.com/@salesforce-ux/design-system@2.24.3/assets/icons/standard-sprite/svg/symbols.svg#all"></use>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="slds-media__body">
+                        <h2 class="slds-card__header-title">
+                            <a href="/objects" class="slds-card__header-link">Object Browser</a>
+                        </h2>
+                    </div>
+                </header>
+            </div>
+            <div class="slds-card__body slds-card__body_inner">
+                <p>Browse all backed up Salesforce objects.</p>
+            </div>
+            <footer class="slds-card__footer">
+                <a class="slds-card__footer-action" href="/objects">Browse Objects</a>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Statistics -->
+    <div class="slds-card slds-m-top_medium" th:if="${stats != null}">
+        <div class="slds-card__header slds-grid">
+            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                <div class="slds-media__body">
+                    <h2 class="slds-card__header-title">
+                        <span>Backup Statistics</span>
+                    </h2>
+                </div>
+            </header>
+        </div>
+        <div class="slds-card__body slds-card__body_inner">
+            <dl class="slds-dl_horizontal">
+                <dt class="slds-dl_horizontal__label">Total Objects:</dt>
+                <dd class="slds-dl_horizontal__detail" th:text="${stats.totalObjects}">0</dd>
+                <dt class="slds-dl_horizontal__label">Total Records:</dt>
+                <dd class="slds-dl_horizontal__detail" th:text="${stats.totalRecords}">0</dd>
+                <dt class="slds-dl_horizontal__label">Deleted Records:</dt>
+                <dd class="slds-dl_horizontal__detail" th:text="${stats.deletedRecords}">0</dd>
+                <dt class="slds-dl_horizontal__label">Archived Records:</dt>
+                <dd class="slds-dl_horizontal__detail" th:text="${stats.archivedRecords}">0</dd>
+            </dl>
+        </div>
+    </div>
+</div>
+</body>
+</html>

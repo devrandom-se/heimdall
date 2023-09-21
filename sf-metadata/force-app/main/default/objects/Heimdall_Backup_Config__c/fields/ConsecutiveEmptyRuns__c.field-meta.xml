@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>ConsecutiveEmptyRuns__c</fullName>
+    <defaultValue>0</defaultValue>
+    <description>Number of consecutive backup runs that found zero new records. Resets to 0 when new records are found. After 3 empty runs, CHECK COUNT First is automatically enabled.</description>
+    <externalId>false</externalId>
+    <label>Consecutive Empty Runs</label>
+    <precision>3</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

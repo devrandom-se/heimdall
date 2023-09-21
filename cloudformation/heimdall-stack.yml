@@ -1,0 +1,841 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Heimdall - Salesforce Backup Solution (ECS Fargate + App Runner GUI)
+
+Parameters:
+  # Stack naming
+  StackPrefix:
+    Type: String
+    Default: heimdall
+    Description: Prefix for all resource names
+
+  # Networking
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for ECS tasks and RDS
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for ECS tasks and RDS (minimum 2 for RDS)
+
+  # Salesforce Configuration (Client Credentials Flow)
+  SalesforceInstanceUrl:
+    Type: String
+    Description: "Salesforce instance URL (e.g., https://mycompany.my.salesforce.com)"
+
+  SalesforceOrgId:
+    Type: String
+    Description: "Salesforce Organization ID (18 characters, starts with 00D)"
+
+  SalesforceClientId:
+    Type: String
+    Description: "Connected App Client ID (Consumer Key)"
+
+  SalesforceClientSecret:
+    Type: String
+    NoEcho: true
+    Description: "Connected App Client Secret (Consumer Secret)"
+
+  # Database Configuration
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues:
+      - db.t4g.micro
+      - db.t4g.small
+      - db.t4g.medium
+    Description: RDS instance type
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+    Description: Database storage in GB
+
+  # ECS Configuration
+  BackupTaskCpu:
+    Type: String
+    Default: "2048"
+    AllowedValues:
+      - "1024"
+      - "2048"
+      - "4096"
+    Description: CPU units for backup task (1024 = 1 vCPU)
+
+  BackupTaskMemory:
+    Type: String
+    Default: "4096"
+    AllowedValues:
+      - "2048"
+      - "4096"
+      - "8192"
+    Description: Memory in MB for backup task
+
+  # Database Password (provided at stack creation)
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: "PostgreSQL master password (min 16 characters)"
+
+  # Scheduling
+  BackupSchedule:
+    Type: String
+    Default: "cron(0 18 * * ? *)"
+    Description: "EventBridge cron expression for backup schedule (default: 18:00 UTC daily)"
+
+  EnableScheduledBackup:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable scheduled backup
+
+  # GUI Authentication (optional - enables secure web interface)
+  EnableBastion:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable bastion EC2 instance for SSM port forwarding to RDS
+
+  EnableGui:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable GUI with Cognito authentication
+
+  GuiDomainName:
+    Type: String
+    Default: ""
+    Description: "Domain name for GUI (e.g., heimdall.example.com). Required if EnableGui=true"
+
+  GuiCertificateArn:
+    Type: String
+    Default: ""
+    Description: "ACM Certificate ARN for GUI domain (must be in same region). Required if EnableGui=true"
+
+  GuiAdminEmail:
+    Type: String
+    Default: ""
+    Description: "Admin email for initial Cognito user. Required if EnableGui=true"
+
+Resources:
+  #############################################
+  # S3 Bucket for Backup Data
+  #############################################
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${StackPrefix}-backup-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+          - Id: CleanupOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+
+  #############################################
+  # SSM Parameter Store (free tier)
+  #############################################
+  RDSPasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${StackPrefix}/rds/password
+      Type: String
+      Value: !Ref DBPassword
+      Description: RDS PostgreSQL password
+
+  SalesforceClientSecretParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${StackPrefix}/salesforce/client-secret
+      Type: String
+      Value: !Ref SalesforceClientSecret
+      Description: Salesforce Connected App Client Secret
+
+  #############################################
+  # Security Groups
+  #############################################
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Heimdall RDS
+      GroupName: !Sub ${StackPrefix}-rds-sg
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${StackPrefix}-rds-sg
+
+  DatabaseSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref DatabaseSecurityGroup
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Heimdall ECS tasks
+      GroupName: !Sub ${StackPrefix}-ecs-sg
+      VpcId: !Ref VpcId
+      # No ingress rules - backup tasks don't need incoming connections
+      # GUI traffic comes from ALB via ALBToECSIngress rule
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${StackPrefix}-ecs-sg
+
+  # Allow ECS to access RDS
+  ECSToRDSIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref ECSSecurityGroup
+
+  # ALB Security Group (only created when GUI is enabled)
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: GuiEnabled
+    Properties:
+      GroupDescription: Security group for Heimdall ALB
+      GroupName: !Sub ${StackPrefix}-alb-sg
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${StackPrefix}-alb-sg
+
+  # Allow ALB to access ECS GUI containers
+  ALBToECSIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: GuiEnabled
+    Properties:
+      GroupId: !Ref ECSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  #############################################
+  # RDS PostgreSQL
+  #############################################
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Heimdall RDS
+      DBSubnetGroupName: !Sub ${StackPrefix}-db-subnet-group
+      SubnetIds: !Ref SubnetIds
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${StackPrefix}-db
+      DBName: heimdall
+      Engine: postgres
+      EngineVersion: "15"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      MasterUsername: heimdall
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      EnablePerformanceInsights: false
+    DeletionPolicy: Snapshot
+
+  #############################################
+  # ECR Repository
+  #############################################
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${StackPrefix}-repository
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  #############################################
+  # IAM Roles
+  #############################################
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${StackPrefix}-ecs-execution-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SSMAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/*
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${StackPrefix}*
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${StackPrefix}-ecs-task-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !GetAtt BackupBucket.Arn
+                  - !Sub ${BackupBucket.Arn}/*
+        - PolicyName: SSMAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/*
+        - PolicyName: RDSLifecycle
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:StartDBInstance
+                  - rds:StopDBInstance
+                Resource:
+                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${StackPrefix}-db
+
+  #############################################
+  # ECS Cluster & Task Definition
+  #############################################
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${StackPrefix}-cluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+
+  BackupTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - ECSTaskExecutionRole
+      - ECSTaskRole
+    Properties:
+      Family: !Sub ${StackPrefix}-backup
+      Cpu: !Ref BackupTaskCpu
+      Memory: !Ref BackupTaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Sub ${StackPrefix}-backup
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${StackPrefix}-repository:latest
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: "true"
+              awslogs-group: !Sub /ecs/${StackPrefix}-backup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: backup
+            - Name: SALESFORCE_BASE_URL
+              Value: !Ref SalesforceInstanceUrl
+            - Name: SALESFORCE_ORG_ID
+              Value: !Ref SalesforceOrgId
+            - Name: SALESFORCE_CLIENT_ID
+              Value: !Ref SalesforceClientId
+            - Name: SALESFORCE_GRANT_TYPE
+              Value: "client_credentials"
+            - Name: AWS_S3_BUCKET_NAME
+              Value: !Ref BackupBucket
+            - Name: AWS_S3_REGION
+              Value: !Ref AWS::Region
+            - Name: POSTGRES_URL
+              Value: !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/heimdall
+            - Name: POSTGRES_USERNAME
+              Value: heimdall
+            - Name: RDS_INSTANCE_IDENTIFIER
+              Value: !Sub ${StackPrefix}-db
+          Secrets:
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/rds/password
+            - Name: SALESFORCE_CLIENT_SECRET
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/salesforce/client-secret
+
+  #############################################
+  # EventBridge Scheduled Rule
+  #############################################
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${StackPrefix}-eventbridge-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunECSTask
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource:
+                  - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${StackPrefix}-backup:*
+                Condition:
+                  ArnLike:
+                    ecs:cluster: !GetAtt ECSCluster.Arn
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt ECSTaskExecutionRole.Arn
+                  - !GetAtt ECSTaskRole.Arn
+
+  BackupScheduleRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleEnabled
+    Properties:
+      Name: !Sub ${StackPrefix}-backup-schedule
+      Description: Scheduled Heimdall backup
+      ScheduleExpression: !Ref BackupSchedule
+      State: ENABLED
+      Targets:
+        - Id: BackupTask
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref BackupTaskDefinition
+            TaskCount: 1
+            LaunchType: FARGATE
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                Subnets: !Ref SubnetIds
+                SecurityGroups:
+                  - !Ref ECSSecurityGroup
+                  - !Ref DatabaseSecurityGroup
+                AssignPublicIp: ENABLED
+
+  #############################################
+  # ECS Service for GUI (DesiredCount=0 by default)
+  # Start manually: aws ecs update-service --desired-count 1
+  #############################################
+  GuiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${StackPrefix}-gui
+      Cpu: "2048"
+      Memory: "4096"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Sub ${StackPrefix}-gui
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${StackPrefix}-repository:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: "true"
+              awslogs-group: !Sub /ecs/${StackPrefix}-gui
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: web
+            - Name: JAVA_OPTS
+              Value: "-Xms512m -Xmx3g"
+            - Name: SALESFORCE_ORG_ID
+              Value: !Ref SalesforceOrgId
+            - Name: AWS_S3_BUCKET_NAME
+              Value: !Ref BackupBucket
+            - Name: AWS_S3_REGION
+              Value: !Ref AWS::Region
+            - Name: POSTGRES_URL
+              Value: !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/heimdall
+            - Name: POSTGRES_USERNAME
+              Value: heimdall
+            - Name: RDS_INSTANCE_IDENTIFIER
+              Value: !Sub ${StackPrefix}-db
+          Secrets:
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/rds/password
+
+  GuiService:
+    Type: AWS::ECS::Service
+    Condition: GuiEnabled
+    DependsOn:
+      - ALBListener
+    Properties:
+      ServiceName: !Sub ${StackPrefix}-gui
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref GuiTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref SubnetIds
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+            - !Ref DatabaseSecurityGroup
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - ContainerName: !Sub ${StackPrefix}-gui
+          ContainerPort: 8080
+          TargetGroupArn: !Ref GuiTargetGroup
+      HealthCheckGracePeriodSeconds: 60
+
+  #############################################
+  # Cognito User Pool for GUI Authentication
+  #############################################
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Condition: GuiEnabled
+    Properties:
+      UserPoolName: !Sub ${StackPrefix}-users
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Condition: GuiEnabled
+    Properties:
+      Domain: !Sub ${StackPrefix}-${AWS::AccountId}
+      UserPoolId: !Ref CognitoUserPool
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: GuiEnabled
+    Properties:
+      ClientName: !Sub ${StackPrefix}-gui-client
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - !Sub https://${GuiDomainName}/oauth2/idpresponse
+      SupportedIdentityProviders:
+        - COGNITO
+
+  CognitoAdminUser:
+    Type: AWS::Cognito::UserPoolUser
+    Condition: GuiEnabled
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Username: !Ref GuiAdminEmail
+      UserAttributes:
+        - Name: email
+          Value: !Ref GuiAdminEmail
+        - Name: email_verified
+          Value: "true"
+      DesiredDeliveryMediums:
+        - EMAIL
+
+  #############################################
+  # Application Load Balancer for GUI
+  #############################################
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: GuiEnabled
+    Properties:
+      Name: !Sub ${StackPrefix}-alb
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets: !Ref SubnetIds
+
+  GuiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: GuiEnabled
+    Properties:
+      Name: !Sub ${StackPrefix}-gui-tg
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: GuiEnabled
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref GuiCertificateArn
+      DefaultActions:
+        - Type: authenticate-cognito
+          Order: 1
+          AuthenticateCognitoConfig:
+            UserPoolArn: !GetAtt CognitoUserPool.Arn
+            UserPoolClientId: !Ref CognitoUserPoolClient
+            UserPoolDomain: !Sub ${StackPrefix}-${AWS::AccountId}
+            OnUnauthenticatedRequest: authenticate
+            Scope: openid email profile
+        - Type: forward
+          Order: 2
+          TargetGroupArn: !Ref GuiTargetGroup
+
+  #############################################
+  # Bastion Host for SSM Port Forwarding to RDS
+  #############################################
+  BastionRole:
+    Type: AWS::IAM::Role
+    Condition: BastionEnabled
+    Properties:
+      RoleName: !Sub ${StackPrefix}-bastion-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: BastionEnabled
+    Properties:
+      InstanceProfileName: !Sub ${StackPrefix}-bastion-profile
+      Roles:
+        - !Ref BastionRole
+
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Condition: BastionEnabled
+    Properties:
+      InstanceType: t4g.nano
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}"
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Select [0, !Ref SubnetIds]
+          AssociatePublicIpAddress: true
+          GroupSet:
+            - !Ref DatabaseSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${StackPrefix}-bastion
+
+  #############################################
+  # ECR Push User (for CI/CD)
+  #############################################
+  ECRPushUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${StackPrefix}-ecr-push-user
+      Policies:
+        - PolicyName: ECRPushPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource: !GetAtt ECRRepository.Arn
+
+Conditions:
+  ScheduleEnabled: !Equals [!Ref EnableScheduledBackup, "true"]
+  BastionEnabled: !Equals [!Ref EnableBastion, "true"]
+  GuiEnabled: !Equals [!Ref EnableGui, "true"]
+
+Outputs:
+  BackupBucketName:
+    Description: S3 bucket for backup data
+    Value: !Ref BackupBucket
+    Export:
+      Name: !Sub ${StackPrefix}-backup-bucket
+
+  RDSEndpoint:
+    Description: RDS PostgreSQL endpoint
+    Value: !Sub ${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}
+    Export:
+      Name: !Sub ${StackPrefix}-rds-endpoint
+
+  ECRRepositoryUri:
+    Description: ECR repository URI
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${StackPrefix}-repository
+    Export:
+      Name: !Sub ${StackPrefix}-ecr-uri
+
+  ECSClusterArn:
+    Description: ECS Cluster ARN
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub ${StackPrefix}-ecs-cluster
+
+  GuiServiceName:
+    Condition: GuiEnabled
+    Description: ECS GUI Service name
+    Value: !Sub ${StackPrefix}-gui
+    Export:
+      Name: !Sub ${StackPrefix}-gui-service
+
+  GuiUrl:
+    Condition: GuiEnabled
+    Description: GUI URL (add DNS CNAME to ALB first)
+    Value: !Sub https://${GuiDomainName}
+
+  ALBDnsName:
+    Condition: GuiEnabled
+    Description: "ALB DNS name - create CNAME record pointing your domain to this"
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+
+  CognitoUserPoolId:
+    Condition: GuiEnabled
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+
+  CognitoLoginUrl:
+    Condition: GuiEnabled
+    Description: Cognito Hosted UI login URL
+    Value: !Sub https://${StackPrefix}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${CognitoUserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=https://${GuiDomainName}/oauth2/idpresponse
+
+  BastionInstanceId:
+    Condition: BastionEnabled
+    Description: "Bastion instance ID for SSM port forwarding. Usage: aws ssm start-session --target <id> --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters '{\"host\":[\"<rds-endpoint>\"],\"portNumber\":[\"5432\"],\"localPortNumber\":[\"5432\"]}'"
+    Value: !Ref BastionInstance
+
+  ECRPushUserName:
+    Description: IAM user for pushing to ECR
+    Value: !Ref ECRPushUser
+
+  RDSPasswordParameterName:
+    Description: SSM Parameter for RDS password
+    Value: !Sub /${StackPrefix}/rds/password
+
+  SalesforceClientSecretParameterName:
+    Description: SSM Parameter for Salesforce Client Secret
+    Value: !Sub /${StackPrefix}/salesforce/client-secret

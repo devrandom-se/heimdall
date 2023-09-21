@@ -1,0 +1,62 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+**/src/main/**/target/
+**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+out/
+.DS_Store
+.mvn/
+mvn*
+
+# JWT certificates and keys
+jwt-certs/
+*.key
+*.pem
+*.crt
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# Local configuration overrides
+application-local.properties
+.env.docker
+
+# Claude Code
+.claude/
+
+# IntelliJ run configurations
+.run/
+
+# Salesforce CLI local state
+sf-metadata/.sf/

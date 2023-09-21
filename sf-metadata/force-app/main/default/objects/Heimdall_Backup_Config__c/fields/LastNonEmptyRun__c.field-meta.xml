@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>LastNonEmptyRun__c</fullName>
+    <description>Last backup run date that found new records. Used to track activity patterns.</description>
+    <externalId>false</externalId>
+    <label>Last Non-Empty Run</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Date</type>
+</CustomField>

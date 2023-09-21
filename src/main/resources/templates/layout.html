@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${pageTitle} ? ${pageTitle} + ' - Heimdall' : 'Heimdall'">Heimdall</title>
+    <!-- Salesforce Lightning Design System -->
+    <link rel="stylesheet" href="https://unpkg.com/@salesforce-ux/design-system@2.24.3/assets/styles/salesforce-lightning-design-system.min.css">
+    <style>
+        body {
+            background-color: #f4f6f9;
+        }
+        .slds-page-header {
+            background-color: #16325c;
+        }
+        .slds-page-header__title {
+            color: white;
+        }
+        .nav-link {
+            color: rgba(255,255,255,0.8);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+        }
+        .nav-link:hover {
+            color: white;
+        }
+        .main-content {
+            padding: 1rem;
+        }
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="slds-page-header" role="banner">
+        <div class="slds-page-header__row">
+            <div class="slds-page-header__col-title">
+                <div class="slds-media">
+                    <div class="slds-media__figure">
+                        <span class="slds-icon_container slds-icon-standard-account">
+                            <svg class="slds-icon slds-page-header__icon" aria-hidden="true">
+                                <use href="https://unpkg.com/@salesforce-ux/design-system@2.24.3/assets/icons/standard-sprite/svg/symbols.svg#data_streams"></use>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="slds-media__body">
+                        <div class="slds-page-header__name">
+                            <div class="slds-page-header__name-title">
+                                <h1>
+                                    <a href="/" class="slds-page-header__title" style="color: white; text-decoration: none;">Heimdall</a>
+                                </h1>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="slds-page-header__col-actions">
+                <div class="slds-page-header__controls">
+                    <nav>
+                        <a href="/deleted" class="nav-link">Deleted Records</a>
+                        <a href="/archived" class="nav-link">Archived Records</a>
+                        <a href="/objects" class="nav-link">Objects</a>
+                        <span sec:authorize="isAuthenticated()" class="nav-link" th:text="'Logged in as: ' + ${#authentication?.name}"></span>
+                    </nav>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div layout:fragment="content">
+            <!-- Page content will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="slds-p-around_medium slds-text-align_center slds-text-color_weak">
+        <p>Heimdall Backup Restore GUI</p>
+    </footer>
+</body>
+</html>

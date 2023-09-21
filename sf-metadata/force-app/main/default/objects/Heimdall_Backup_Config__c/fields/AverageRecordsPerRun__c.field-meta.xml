@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>AverageRecordsPerRun__c</fullName>
+    <description>Average number of records backed up per run. Calculated using weighted average (80% old, 20% new) to give more weight to recent history.</description>
+    <externalId>false</externalId>
+    <label>Average Records Per Run</label>
+    <precision>10</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

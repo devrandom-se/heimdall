@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout}">
+<head>
+    <title>Object Browser</title>
+</head>
+<body>
+<div layout:fragment="content">
+    <!-- Page Header -->
+    <div class="slds-page-header slds-page-header_record-home" style="background: white; margin-bottom: 1rem;">
+        <div class="slds-page-header__row">
+            <div class="slds-page-header__col-title">
+                <div class="slds-page-header__name">
+                    <div class="slds-page-header__title slds-truncate" title="Object Browser">Object Browser</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Object Statistics Table -->
+    <div class="slds-card">
+        <div class="slds-card__header slds-grid">
+            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                <div class="slds-media__body">
+                    <h2 class="slds-card__header-title">
+                        <span th:text="'Backed Up Objects (' + ${objectStats.size()} + ')'">Objects</span>
+                    </h2>
+                </div>
+            </header>
+        </div>
+        <div class="slds-card__body">
+            <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped">
+                <thead>
+                    <tr class="slds-line-height_reset">
+                        <th scope="col"><div class="slds-truncate">Object Name</div></th>
+                        <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Unique Records</div></th>
+                        <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Total Versions</div></th>
+                        <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Deleted</div></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="stats : ${objectStats}" class="slds-hint-parent">
+                        <td>
+                            <div class="slds-truncate" th:text="${stats.objectName}">Object</div>
+                        </td>
+                        <td class="slds-text-align_right">
+                            <div class="slds-truncate" th:text="${#numbers.formatInteger(stats.uniqueRecords, 1, 'COMMA')}">0</div>
+                        </td>
+                        <td class="slds-text-align_right">
+                            <div class="slds-truncate" th:text="${#numbers.formatInteger(stats.totalVersions, 1, 'COMMA')}">0</div>
+                        </td>
+                        <td class="slds-text-align_right">
+                            <div class="slds-truncate">
+                                <span th:if="${stats.deletedCount > 0}">
+                                    <a th:href="@{/deleted(object=${stats.objectName})}" th:text="${#numbers.formatInteger(stats.deletedCount, 1, 'COMMA')}">0</a>
+                                </span>
+                                <span th:if="${stats.deletedCount == 0}">0</span>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr th:if="${objectStats.isEmpty()}">
+                        <td colspan="4" class="slds-text-align_center slds-p-around_medium">
+                            No backed up objects found.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>
