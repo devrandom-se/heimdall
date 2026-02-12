@@ -62,7 +62,7 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
 ### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/devrandom-ab/heimdall.git
+git clone https://github.com/devrandom-se/heimdall.git
 cd heimdall
 
 # Copy and edit configuration
@@ -99,9 +99,27 @@ Or use the helper script:
 ./start-web.sh
 ```
 
-## AWS Deployment (CloudFormation)
+## AWS Deployment
 
-For production use, deploy the full stack on AWS:
+### 1. Deploy Salesforce Metadata
+
+Install the Heimdall custom object and External Client App into your Salesforce org:
+
+```bash
+cd sf-metadata
+sf org login web --alias my-org --set-default
+./deploy.sh admin@example.com backup.user@example.com my-org
+```
+
+This creates:
+- `Heimdall_Backup_Config__c` custom object (backup configuration per object)
+- External Client App with OAuth client credentials flow
+
+After deploy, go to **Setup > External Client Apps > Heimdall Backup** and note the **Consumer Key** and **Consumer Secret**.
+
+### 2. Create CloudFormation Stack
+
+The stack name is used as prefix for all resources (e.g. `heimdall` creates `heimdall-db`, `heimdall-cluster`, etc.). Deploy one stack per Salesforce org.
 
 ```bash
 aws cloudformation create-stack \
@@ -110,32 +128,59 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameters \
     ParameterKey=VpcId,ParameterValue=vpc-xxx \
-    ParameterKey=SubnetIds,ParameterValue="subnet-aaa,subnet-bbb" \
+    ParameterKey=SubnetIds,ParameterValue="subnet-aaa\,subnet-bbb" \
     ParameterKey=SalesforceInstanceUrl,ParameterValue=https://mycompany.my.salesforce.com \
     ParameterKey=SalesforceOrgId,ParameterValue=00Dxxxxxxxxxxxxxxx \
     ParameterKey=SalesforceClientId,ParameterValue=3MVG9... \
-    ParameterKey=SalesforceClientSecret,ParameterValue=... \
-    ParameterKey=DBPassword,ParameterValue=...
+    ParameterKey=DBPassword,ParameterValue=your-db-password
 ```
 
-This creates: S3 bucket, RDS PostgreSQL, ECS cluster, ECR repository, EventBridge schedule, and optionally ALB + Cognito for the GUI.
+This creates: S3 bucket, RDS PostgreSQL (db.t4g.medium), ECS cluster, ECR repository, EventBridge schedule, and SSM parameters.
 
-### What it costs
+> **Tip:** Use the default VPC's public subnets (minimum 2 for RDS). No NAT gateway or VPC endpoints needed — ECS tasks get public IPs for outbound traffic, and RDS is not publicly accessible.
+
+### 3. Set Secrets
+
+The stack creates SSM parameters with placeholder values. Update them with real credentials as SecureString:
+
+```bash
+./set-secrets.sh heimdall "your-db-password" "sf-consumer-secret-from-step-1"
+```
+
+### 4. Build and Push Docker Image
+
+```bash
+./build-and-push.sh
+```
+
+### 5. Stop RDS Until First Backup
+
+The database is only needed during backups and GUI sessions. Stop it to save costs until the first scheduled backup starts it automatically:
+
+```bash
+aws rds stop-db-instance --db-instance-identifier heimdall-db
+```
+
+The backup schedule (default: daily at 18:00 UTC) will auto-start the database, run the backup, and stop it again.
+
+### What it Costs
 
 The stack is designed for minimal cost:
-- **S3**: Pennies per GB/month (auto-transitions to IA after 30 days)
-- **RDS**: On-demand only — auto-starts for backups/GUI, auto-stops when idle
-- **ECS Fargate**: Pay per backup run (~2-20 min depending on org size)
+- **S3**: Pennies per GB/month (auto-transitions to Infrequent Access after 30 days)
+- **RDS**: On-demand only — auto-starts for backups/GUI, auto-stops when idle (~$3-5/month)
+- **ECS Fargate**: Pay per backup run
 - **Typical total**: $5-15/month for a mid-size org
 
 ### Helper Scripts
 
 | Script | Purpose |
 |--------|---------|
+| `set-secrets.sh` | Store DB password and SF client secret in SSM as SecureString |
+| `sf-metadata/deploy.sh` | Deploy Salesforce metadata (custom object + External Client App) |
+| `build-and-push.sh` | Build Docker image and push to ECR |
 | `db-tunnel.sh` | SSM tunnel to RDS via bastion (auto-starts both) |
 | `toggle-gui.sh` | Enable/disable GUI resources in CloudFormation |
 | `start-web.sh` | Run GUI locally (requires tunnel) |
-| `build-and-push.sh` | Build Docker image and push to ECR |
 
 ## Configuration
 
