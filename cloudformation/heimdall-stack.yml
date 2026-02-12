@@ -33,7 +33,8 @@ Parameters:
   SalesforceClientSecret:
     Type: String
     NoEcho: true
-    Description: "Connected App Client Secret (Consumer Secret)"
+    Default: "CHANGE_ME"
+    Description: "Connected App Client Secret (placeholder - update via set-secrets.sh)"
 
   # Database Configuration
   DBInstanceClass:
@@ -71,12 +72,12 @@ Parameters:
       - "8192"
     Description: Memory in MB for backup task
 
-  # Database Password (provided at stack creation)
+  # Database Password (update via set-secrets.sh after stack creation)
   DBPassword:
     Type: String
     NoEcho: true
-    MinLength: 16
-    Description: "PostgreSQL master password (min 16 characters)"
+    Default: "CHANGE_ME_CHANGE_ME"
+    Description: "PostgreSQL master password (placeholder - update via set-secrets.sh)"
 
   # Scheduling
   BackupSchedule:
@@ -163,15 +164,15 @@ Resources:
     Properties:
       Name: !Sub /${StackPrefix}/rds/password
       Type: String
-      Value: !Ref DBPassword
-      Description: RDS PostgreSQL password
+      Value: "CHANGE_ME_via_set-secrets.sh"
+      Description: "Placeholder - run set-secrets.sh to set real value as SecureString"
 
   SalesforceClientSecretParameter:
     Type: AWS::SSM::Parameter
     Properties:
       Name: !Sub /${StackPrefix}/salesforce/client-secret
       Type: String
-      Value: !Ref SalesforceClientSecret
+      Value: "CHANGE_ME_via_set-secrets.sh"
       Description: Salesforce Connected App Client Secret
 
   #############################################
