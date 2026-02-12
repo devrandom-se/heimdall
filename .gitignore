@@ -60,3 +60,6 @@ application-local.properties
 
 # Salesforce CLI local state
 sf-metadata/.sf/
+
+# Generated from template by deploy.sh (contains org-specific values)
+sf-metadata/force-app/

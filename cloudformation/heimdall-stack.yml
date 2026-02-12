@@ -2,12 +2,6 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: Heimdall - Salesforce Backup Solution (ECS Fargate + App Runner GUI)
 
 Parameters:
-  # Stack naming
-  StackPrefix:
-    Type: String
-    Default: heimdall
-    Description: Prefix for all resource names
-
   # Networking
   VpcId:
     Type: AWS::EC2::VPC::Id
@@ -30,16 +24,11 @@ Parameters:
     Type: String
     Description: "Connected App Client ID (Consumer Key)"
 
-  SalesforceClientSecret:
-    Type: String
-    NoEcho: true
-    Default: "CHANGE_ME"
-    Description: "Connected App Client Secret (placeholder - update via set-secrets.sh)"
 
   # Database Configuration
   DBInstanceClass:
     Type: String
-    Default: db.t4g.micro
+    Default: db.t4g.medium
     AllowedValues:
       - db.t4g.micro
       - db.t4g.small
@@ -132,7 +121,7 @@ Resources:
   BackupBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub ${StackPrefix}-backup-${AWS::AccountId}
+      BucketName: !Sub ${AWS::StackName}-backup-${AWS::AccountId}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -162,7 +151,7 @@ Resources:
   RDSPasswordParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub /${StackPrefix}/rds/password
+      Name: !Sub /${AWS::StackName}/rds/password
       Type: String
       Value: "CHANGE_ME_via_set-secrets.sh"
       Description: "Placeholder - run set-secrets.sh to set real value as SecureString"
@@ -170,7 +159,7 @@ Resources:
   SalesforceClientSecretParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub /${StackPrefix}/salesforce/client-secret
+      Name: !Sub /${AWS::StackName}/salesforce/client-secret
       Type: String
       Value: "CHANGE_ME_via_set-secrets.sh"
       Description: Salesforce Connected App Client Secret
@@ -182,11 +171,11 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for Heimdall RDS
-      GroupName: !Sub ${StackPrefix}-rds-sg
+      GroupName: !Sub ${AWS::StackName}-rds-sg
       VpcId: !Ref VpcId
       Tags:
         - Key: Name
-          Value: !Sub ${StackPrefix}-rds-sg
+          Value: !Sub ${AWS::StackName}-rds-sg
 
   DatabaseSecurityGroupIngress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -201,7 +190,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for Heimdall ECS tasks
-      GroupName: !Sub ${StackPrefix}-ecs-sg
+      GroupName: !Sub ${AWS::StackName}-ecs-sg
       VpcId: !Ref VpcId
       # No ingress rules - backup tasks don't need incoming connections
       # GUI traffic comes from ALB via ALBToECSIngress rule
@@ -210,7 +199,7 @@ Resources:
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub ${StackPrefix}-ecs-sg
+          Value: !Sub ${AWS::StackName}-ecs-sg
 
   # Allow ECS to access RDS
   ECSToRDSIngress:
@@ -228,7 +217,7 @@ Resources:
     Condition: GuiEnabled
     Properties:
       GroupDescription: Security group for Heimdall ALB
-      GroupName: !Sub ${StackPrefix}-alb-sg
+      GroupName: !Sub ${AWS::StackName}-alb-sg
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -240,7 +229,7 @@ Resources:
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub ${StackPrefix}-alb-sg
+          Value: !Sub ${AWS::StackName}-alb-sg
 
   # Allow ALB to access ECS GUI containers
   ALBToECSIngress:
@@ -260,13 +249,13 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: Subnet group for Heimdall RDS
-      DBSubnetGroupName: !Sub ${StackPrefix}-db-subnet-group
+      DBSubnetGroupName: !Sub ${AWS::StackName}-db-subnet-group
       SubnetIds: !Ref SubnetIds
 
   DBInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: !Sub ${StackPrefix}-db
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-db
       DBName: heimdall
       Engine: postgres
       EngineVersion: "15"
@@ -290,7 +279,7 @@ Resources:
   ECRRepository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: !Sub ${StackPrefix}-repository
+      RepositoryName: !Sub ${AWS::StackName}-repository
       ImageScanningConfiguration:
         ScanOnPush: true
       EncryptionConfiguration:
@@ -302,7 +291,7 @@ Resources:
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${StackPrefix}-ecs-execution-role
+      RoleName: !Sub ${AWS::StackName}-ecs-execution-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -322,7 +311,7 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                 Resource:
-                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/*
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*
         - PolicyName: CloudWatchLogs
           PolicyDocument:
             Version: "2012-10-17"
@@ -332,12 +321,12 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${StackPrefix}*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${AWS::StackName}*
 
   ECSTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${StackPrefix}-ecs-task-role
+      RoleName: !Sub ${AWS::StackName}-ecs-task-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -368,7 +357,7 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                 Resource:
-                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/*
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*
         - PolicyName: RDSLifecycle
           PolicyDocument:
             Version: "2012-10-17"
@@ -379,7 +368,7 @@ Resources:
                   - rds:StartDBInstance
                   - rds:StopDBInstance
                 Resource:
-                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${StackPrefix}-db
+                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db
 
   #############################################
   # ECS Cluster & Task Definition
@@ -387,7 +376,7 @@ Resources:
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: !Sub ${StackPrefix}-cluster
+      ClusterName: !Sub ${AWS::StackName}-cluster
       CapacityProviders:
         - FARGATE
         - FARGATE_SPOT
@@ -401,7 +390,7 @@ Resources:
       - ECSTaskExecutionRole
       - ECSTaskRole
     Properties:
-      Family: !Sub ${StackPrefix}-backup
+      Family: !Sub ${AWS::StackName}-backup
       Cpu: !Ref BackupTaskCpu
       Memory: !Ref BackupTaskMemory
       NetworkMode: awsvpc
@@ -410,14 +399,14 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
-        - Name: !Sub ${StackPrefix}-backup
-          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${StackPrefix}-repository:latest
+        - Name: !Sub ${AWS::StackName}-backup
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AWS::StackName}-repository:latest
           Essential: true
           LogConfiguration:
             LogDriver: awslogs
             Options:
               awslogs-create-group: "true"
-              awslogs-group: !Sub /ecs/${StackPrefix}-backup
+              awslogs-group: !Sub /ecs/${AWS::StackName}-backup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
           Environment:
@@ -440,12 +429,12 @@ Resources:
             - Name: POSTGRES_USERNAME
               Value: heimdall
             - Name: RDS_INSTANCE_IDENTIFIER
-              Value: !Sub ${StackPrefix}-db
+              Value: !Sub ${AWS::StackName}-db
           Secrets:
             - Name: POSTGRES_PASSWORD
-              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/rds/password
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/rds/password
             - Name: SALESFORCE_CLIENT_SECRET
-              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/salesforce/client-secret
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/salesforce/client-secret
 
   #############################################
   # EventBridge Scheduled Rule
@@ -453,7 +442,7 @@ Resources:
   EventBridgeRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${StackPrefix}-eventbridge-role
+      RoleName: !Sub ${AWS::StackName}-eventbridge-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -470,7 +459,7 @@ Resources:
                 Action:
                   - ecs:RunTask
                 Resource:
-                  - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${StackPrefix}-backup:*
+                  - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AWS::StackName}-backup:*
                 Condition:
                   ArnLike:
                     ecs:cluster: !GetAtt ECSCluster.Arn
@@ -484,7 +473,7 @@ Resources:
     Type: AWS::Events::Rule
     Condition: ScheduleEnabled
     Properties:
-      Name: !Sub ${StackPrefix}-backup-schedule
+      Name: !Sub ${AWS::StackName}-backup-schedule
       Description: Scheduled Heimdall backup
       ScheduleExpression: !Ref BackupSchedule
       State: ENABLED
@@ -511,7 +500,7 @@ Resources:
   GuiTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: !Sub ${StackPrefix}-gui
+      Family: !Sub ${AWS::StackName}-gui
       Cpu: "2048"
       Memory: "4096"
       NetworkMode: awsvpc
@@ -520,8 +509,8 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
-        - Name: !Sub ${StackPrefix}-gui
-          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${StackPrefix}-repository:latest
+        - Name: !Sub ${AWS::StackName}-gui
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AWS::StackName}-repository:latest
           Essential: true
           PortMappings:
             - ContainerPort: 8080
@@ -530,7 +519,7 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-create-group: "true"
-              awslogs-group: !Sub /ecs/${StackPrefix}-gui
+              awslogs-group: !Sub /ecs/${AWS::StackName}-gui
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
           Environment:
@@ -549,10 +538,10 @@ Resources:
             - Name: POSTGRES_USERNAME
               Value: heimdall
             - Name: RDS_INSTANCE_IDENTIFIER
-              Value: !Sub ${StackPrefix}-db
+              Value: !Sub ${AWS::StackName}-db
           Secrets:
             - Name: POSTGRES_PASSWORD
-              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${StackPrefix}/rds/password
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/rds/password
 
   GuiService:
     Type: AWS::ECS::Service
@@ -560,7 +549,7 @@ Resources:
     DependsOn:
       - ALBListener
     Properties:
-      ServiceName: !Sub ${StackPrefix}-gui
+      ServiceName: !Sub ${AWS::StackName}-gui
       Cluster: !Ref ECSCluster
       TaskDefinition: !Ref GuiTaskDefinition
       DesiredCount: 1
@@ -573,7 +562,7 @@ Resources:
             - !Ref DatabaseSecurityGroup
           AssignPublicIp: ENABLED
       LoadBalancers:
-        - ContainerName: !Sub ${StackPrefix}-gui
+        - ContainerName: !Sub ${AWS::StackName}-gui
           ContainerPort: 8080
           TargetGroupArn: !Ref GuiTargetGroup
       HealthCheckGracePeriodSeconds: 60
@@ -585,7 +574,7 @@ Resources:
     Type: AWS::Cognito::UserPool
     Condition: GuiEnabled
     Properties:
-      UserPoolName: !Sub ${StackPrefix}-users
+      UserPoolName: !Sub ${AWS::StackName}-users
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
       AutoVerifiedAttributes:
@@ -608,14 +597,14 @@ Resources:
     Type: AWS::Cognito::UserPoolDomain
     Condition: GuiEnabled
     Properties:
-      Domain: !Sub ${StackPrefix}-${AWS::AccountId}
+      Domain: !Sub ${AWS::StackName}-${AWS::AccountId}
       UserPoolId: !Ref CognitoUserPool
 
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Condition: GuiEnabled
     Properties:
-      ClientName: !Sub ${StackPrefix}-gui-client
+      ClientName: !Sub ${AWS::StackName}-gui-client
       UserPoolId: !Ref CognitoUserPool
       GenerateSecret: true
       AllowedOAuthFlows:
@@ -651,7 +640,7 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Condition: GuiEnabled
     Properties:
-      Name: !Sub ${StackPrefix}-alb
+      Name: !Sub ${AWS::StackName}-alb
       Type: application
       Scheme: internet-facing
       SecurityGroups:
@@ -662,7 +651,7 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Condition: GuiEnabled
     Properties:
-      Name: !Sub ${StackPrefix}-gui-tg
+      Name: !Sub ${AWS::StackName}-gui-tg
       Port: 8080
       Protocol: HTTP
       VpcId: !Ref VpcId
@@ -690,7 +679,7 @@ Resources:
           AuthenticateCognitoConfig:
             UserPoolArn: !GetAtt CognitoUserPool.Arn
             UserPoolClientId: !Ref CognitoUserPoolClient
-            UserPoolDomain: !Sub ${StackPrefix}-${AWS::AccountId}
+            UserPoolDomain: !Sub ${AWS::StackName}-${AWS::AccountId}
             OnUnauthenticatedRequest: authenticate
             Scope: openid email profile
         - Type: forward
@@ -704,7 +693,7 @@ Resources:
     Type: AWS::IAM::Role
     Condition: BastionEnabled
     Properties:
-      RoleName: !Sub ${StackPrefix}-bastion-role
+      RoleName: !Sub ${AWS::StackName}-bastion-role
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -719,7 +708,7 @@ Resources:
     Type: AWS::IAM::InstanceProfile
     Condition: BastionEnabled
     Properties:
-      InstanceProfileName: !Sub ${StackPrefix}-bastion-profile
+      InstanceProfileName: !Sub ${AWS::StackName}-bastion-profile
       Roles:
         - !Ref BastionRole
 
@@ -738,7 +727,7 @@ Resources:
             - !Ref DatabaseSecurityGroup
       Tags:
         - Key: Name
-          Value: !Sub ${StackPrefix}-bastion
+          Value: !Sub ${AWS::StackName}-bastion
 
   #############################################
   # ECR Push User (for CI/CD)
@@ -746,7 +735,7 @@ Resources:
   ECRPushUser:
     Type: AWS::IAM::User
     Properties:
-      UserName: !Sub ${StackPrefix}-ecr-push-user
+      UserName: !Sub ${AWS::StackName}-ecr-push-user
       Policies:
         - PolicyName: ECRPushPolicy
           PolicyDocument:
@@ -777,32 +766,32 @@ Outputs:
     Description: S3 bucket for backup data
     Value: !Ref BackupBucket
     Export:
-      Name: !Sub ${StackPrefix}-backup-bucket
+      Name: !Sub ${AWS::StackName}-backup-bucket
 
   RDSEndpoint:
     Description: RDS PostgreSQL endpoint
     Value: !Sub ${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}
     Export:
-      Name: !Sub ${StackPrefix}-rds-endpoint
+      Name: !Sub ${AWS::StackName}-rds-endpoint
 
   ECRRepositoryUri:
     Description: ECR repository URI
-    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${StackPrefix}-repository
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AWS::StackName}-repository
     Export:
-      Name: !Sub ${StackPrefix}-ecr-uri
+      Name: !Sub ${AWS::StackName}-ecr-uri
 
   ECSClusterArn:
     Description: ECS Cluster ARN
     Value: !GetAtt ECSCluster.Arn
     Export:
-      Name: !Sub ${StackPrefix}-ecs-cluster
+      Name: !Sub ${AWS::StackName}-ecs-cluster
 
   GuiServiceName:
     Condition: GuiEnabled
     Description: ECS GUI Service name
-    Value: !Sub ${StackPrefix}-gui
+    Value: !Sub ${AWS::StackName}-gui
     Export:
-      Name: !Sub ${StackPrefix}-gui-service
+      Name: !Sub ${AWS::StackName}-gui-service
 
   GuiUrl:
     Condition: GuiEnabled
@@ -822,7 +811,7 @@ Outputs:
   CognitoLoginUrl:
     Condition: GuiEnabled
     Description: Cognito Hosted UI login URL
-    Value: !Sub https://${StackPrefix}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${CognitoUserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=https://${GuiDomainName}/oauth2/idpresponse
+    Value: !Sub https://${AWS::StackName}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${CognitoUserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=https://${GuiDomainName}/oauth2/idpresponse
 
   BastionInstanceId:
     Condition: BastionEnabled
@@ -835,8 +824,8 @@ Outputs:
 
   RDSPasswordParameterName:
     Description: SSM Parameter for RDS password
-    Value: !Sub /${StackPrefix}/rds/password
+    Value: !Sub /${AWS::StackName}/rds/password
 
   SalesforceClientSecretParameterName:
     Description: SSM Parameter for Salesforce Client Secret
-    Value: !Sub /${StackPrefix}/salesforce/client-secret
+    Value: !Sub /${AWS::StackName}/salesforce/client-secret

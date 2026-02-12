@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtlClntAppOauthSettings xmlns="http://soap.sforce.com/2006/04/metadata">
+    <commaSeparatedOauthScopes>Api, Full, RefreshToken</commaSeparatedOauthScopes>
+    <externalClientApplication>Heimdall_Backup</externalClientApplication>
+    <label>Heimdall_Backup_oauth</label>
+</ExtlClntAppOauthSettings>
