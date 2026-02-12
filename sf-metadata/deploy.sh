@@ -11,6 +11,14 @@ set -euo pipefail
 #   ./deploy.sh admin@example.com backup.user@example.com my-org-alias
 # ----------------
 
+# Check prerequisites
+for cmd in sf jq sed; do
+  if ! command -v "$cmd" &> /dev/null; then
+    echo "Error: $cmd is required but not installed."
+    exit 1
+  fi
+done
+
 if [ $# -lt 2 ]; then
   echo "Usage: $0 <admin-email> <execution-user> [target-org]"
   echo ""
@@ -22,7 +30,10 @@ fi
 
 ADMIN_EMAIL="$1"
 EXECUTION_USER="$2"
-TARGET_ORG="${3:+--target-org $3}"
+TARGET_ORG=()
+if [ -n "${3:-}" ]; then
+  TARGET_ORG=(--target-org "$3")
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -46,10 +57,54 @@ sed -i.bak "s|<clientCredentialsFlowUser>.*</clientCredentialsFlowUser>|<clientC
 find "$SCRIPT_DIR/force-app" -name "*.bak" -delete
 
 echo "Deploying metadata..."
-sf project deploy start --source-dir "$SCRIPT_DIR/force-app" $TARGET_ORG
+sf project deploy start --source-dir "$SCRIPT_DIR/force-app" "${TARGET_ORG[@]}" || true
 
 echo ""
-echo "Done! Next steps:"
+echo "Deploy complete!"
+echo ""
+
+# Assign permission set to execution user
+assign_permset() {
+  local USERNAME="$1"
+  local USER_ID
+  USER_ID=$(sf data query --query "SELECT Id FROM User WHERE Username = '${USERNAME}' LIMIT 1" "${TARGET_ORG[@]}" --json 2>/dev/null | jq -r '.result.records[0].Id // empty')
+  if [ -z "$USER_ID" ]; then
+    echo "  Could not find user: $USERNAME"
+    return 1
+  fi
+  local PS_ID
+  PS_ID=$(sf data query --query "SELECT Id FROM PermissionSet WHERE Name = 'Heimdall_Admin' LIMIT 1" "${TARGET_ORG[@]}" --json 2>/dev/null | jq -r '.result.records[0].Id // empty')
+  if [ -z "$PS_ID" ]; then
+    echo "  Could not find Heimdall_Admin permission set"
+    return 1
+  fi
+  # Check if already assigned
+  local EXISTING
+  EXISTING=$(sf data query --query "SELECT Id FROM PermissionSetAssignment WHERE AssigneeId = '${USER_ID}' AND PermissionSetId = '${PS_ID}' LIMIT 1" "${TARGET_ORG[@]}" --json 2>/dev/null | jq -r '.result.records[0].Id // empty')
+  if [ -n "$EXISTING" ]; then
+    echo "  Already assigned to $USERNAME"
+    return 0
+  fi
+  sf data create record -s PermissionSetAssignment -v "AssigneeId='${USER_ID}' PermissionSetId='${PS_ID}'" "${TARGET_ORG[@]}" --json > /dev/null 2>&1
+  echo "  Assigned Heimdall Admin to $USERNAME"
+}
+
+# Assign to execution user
+echo "Assigning Heimdall Admin permission set..."
+assign_permset "$EXECUTION_USER"
+
+# Offer to assign to deploying user
+DEPLOYING_USER=$(sf org display "${TARGET_ORG[@]}" --json 2>/dev/null | jq -r '.result.username // empty')
+if [ -n "$DEPLOYING_USER" ] && [ "$DEPLOYING_USER" != "$EXECUTION_USER" ]; then
+  read -p "Assign Heimdall Admin to $DEPLOYING_USER too? [Y/n] " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    assign_permset "$DEPLOYING_USER"
+  fi
+fi
+
+echo ""
+echo "Next steps:"
 echo "  1. Go to Setup > External Client Apps > Heimdall Backup"
 echo "  2. Note the Consumer Key and Consumer Secret"
 echo "  3. Run set-secrets.sh to store the client secret in AWS SSM"
