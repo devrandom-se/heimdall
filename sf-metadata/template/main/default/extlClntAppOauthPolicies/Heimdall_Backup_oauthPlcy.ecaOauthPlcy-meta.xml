@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtlClntAppOauthConfigurablePolicies xmlns="http://soap.sforce.com/2006/04/metadata">
     <clientCredentialsFlowUser>CHANGE_ME</clientCredentialsFlowUser>
+    <commaSeparatedPermissionSet>Heimdall_Admin</commaSeparatedPermissionSet>
     <externalClientApplication>Heimdall_Backup</externalClientApplication>
     <ipRelaxationPolicyType>Enforce</ipRelaxationPolicyType>
     <isClientCredentialsFlowEnabled>true</isClientCredentialsFlowEnabled>
