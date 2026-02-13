@@ -27,8 +27,11 @@ import se.devrandom.heimdall.storage.BackupStatisticsService;
 import se.devrandom.heimdall.storage.S3Service;
 import se.devrandom.heimdall.util.RetryUtil;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -141,9 +144,8 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
     }
 
     /**
-     * Downloads ContentVersion from Salesforce and streams directly to S3.
-     * Uses in-memory buffering (acceptable since WebClient has 16MB limit).
-     * This approach is simpler and more reliable than piped streams.
+     * Downloads ContentVersion from Salesforce via temp file and uploads to S3.
+     * Uses temp file instead of in-memory buffering to avoid OOM on large files.
      */
     private void downloadAndUploadStreaming() throws Exception {
         String uri = String.format("/services/data/%s/sobjects/ContentVersion/%s/VersionData",
@@ -151,9 +153,9 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
 
         log.debug("Downloading ContentVersion {} from Salesforce", recordId);
 
-        // Download from Salesforce to memory
-        byte[] fileData;
+        Path tempFile = Files.createTempFile("cv-" + recordId + "-", ".tmp");
         try {
+            // Download from Salesforce to temp file
             Flux<DataBuffer> dataBufferFlux = webClient
                     .get()
                     .uri(uri)
@@ -161,41 +163,36 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
                     .retrieve()
                     .bodyToFlux(DataBuffer.class);
 
-            // Collect all data buffers into single DataBuffer, then extract bytes
-            DataBuffer dataBuffer = DataBufferUtils.join(dataBufferFlux).block();
-            if (dataBuffer == null) {
+            DataBufferUtils.write(dataBufferFlux, tempFile, StandardOpenOption.WRITE).block();
+            long fileSize = Files.size(tempFile);
+
+            if (fileSize == 0) {
                 throw new IOException("No data received from Salesforce for " + recordId);
             }
 
-            // Extract bytes from DataBuffer
-            fileData = new byte[dataBuffer.readableByteCount()];
-            dataBuffer.read(fileData);
-            DataBufferUtils.release(dataBuffer);
+            log.debug("Downloaded {} bytes for ContentVersion {}", fileSize, recordId);
 
-            log.debug("Downloaded {} bytes for ContentVersion {}", fileData.length, recordId);
+            // Upload to S3 from temp file
+            try (InputStream inputStream = Files.newInputStream(tempFile)) {
+                s3Service.uploadContentVersionFileStreamingByChecksum(
+                        inputStream,
+                        fileSize,
+                        checksum,
+                        fileExtension,
+                        recordId
+                );
+            }
 
-        } catch (Exception e) {
-            throw new IOException("Failed to download ContentVersion from Salesforce: " + e.getMessage(), e);
-        }
+            log.debug("Uploaded {} bytes to S3 (checksum-based) for ContentVersion {}", fileSize, recordId);
 
-        // Upload to S3 using checksum-based key
-        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(fileData)) {
-            s3Service.uploadContentVersionFileStreamingByChecksum(
-                    inputStream,
-                    fileData.length,
-                    checksum,
-                    fileExtension,
-                    recordId
-            );
-
-            log.debug("Uploaded {} bytes to S3 (checksum-based) for ContentVersion {}", fileData.length, recordId);
+            // Update statistics
+            statisticsService.addBytesTransferred(fileSize);
 
         } catch (Exception e) {
-            throw new IOException("Failed to upload ContentVersion to S3: " + e.getMessage(), e);
+            throw new IOException("Failed to process ContentVersion " + recordId + ": " + e.getMessage(), e);
+        } finally {
+            Files.deleteIfExists(tempFile);
         }
-
-        // Update statistics
-        statisticsService.addBytesTransferred(fileData.length);
     }
 }
 
