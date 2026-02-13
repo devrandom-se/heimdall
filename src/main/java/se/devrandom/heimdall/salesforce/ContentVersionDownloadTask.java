@@ -27,12 +27,15 @@ import se.devrandom.heimdall.storage.BackupStatisticsService;
 import se.devrandom.heimdall.storage.S3Service;
 import se.devrandom.heimdall.util.RetryUtil;
 
+import org.springframework.http.HttpStatus;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
@@ -58,6 +61,7 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
     private final BackupStatisticsService statisticsService;
     private final int skipFilesBelowKb;
     private final Set<String> globalChecksumCache;
+    private final ApiLimitTracker apiLimitTracker;
 
     public ContentVersionDownloadTask(
             String recordId,
@@ -72,7 +76,8 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
             S3Service s3Service,
             BackupStatisticsService statisticsService,
             int skipFilesBelowKb,
-            Set<String> globalChecksumCache) {
+            Set<String> globalChecksumCache,
+            ApiLimitTracker apiLimitTracker) {
         this.recordId = recordId;
         this.checksum = checksum;
         this.fileExtension = fileExtension;
@@ -86,6 +91,7 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
         this.statisticsService = statisticsService;
         this.skipFilesBelowKb = skipFilesBelowKb;
         this.globalChecksumCache = globalChecksumCache;
+        this.apiLimitTracker = apiLimitTracker;
     }
 
     @Override
@@ -155,13 +161,23 @@ public class ContentVersionDownloadTask implements Callable<ContentVersionResult
 
         Path tempFile = Files.createTempFile("cv-" + recordId + "-", ".tmp");
         try {
-            // Download from Salesforce to temp file
+            // Download from Salesforce to temp file (using exchangeToFlux to capture API limit header)
             Flux<DataBuffer> dataBufferFlux = webClient
                     .get()
                     .uri(uri)
                     .headers(headers -> headers.setBearerAuth(salesforceAccessToken))
-                    .retrieve()
-                    .bodyToFlux(DataBuffer.class);
+                    .exchangeToFlux(response -> {
+                        if (apiLimitTracker != null) {
+                            List<String> limitHeader = response.headers().header("Sforce-Limit-Info");
+                            if (!limitHeader.isEmpty()) {
+                                apiLimitTracker.updateFromHeader(limitHeader.get(0));
+                            }
+                        }
+                        if (!response.statusCode().equals(HttpStatus.OK)) {
+                            return response.createException().flatMapMany(Flux::error);
+                        }
+                        return response.bodyToFlux(DataBuffer.class);
+                    });
 
             DataBufferUtils.write(dataBufferFlux, tempFile, StandardOpenOption.WRITE).block();
             long fileSize = Files.size(tempFile);

@@ -26,6 +26,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+import se.devrandom.heimdall.salesforce.ApiLimitTracker;
 import se.devrandom.heimdall.salesforce.SalesforceService;
 import se.devrandom.heimdall.storage.BackupStatisticsService;
 import se.devrandom.heimdall.storage.RdsLifecycleService;
@@ -46,17 +47,20 @@ public class JobCompletionNotificationListener implements JobExecutionListener {
     private final BackupStatisticsService statisticsService;
     private final Environment environment;
     private final Optional<RdsLifecycleService> rdsLifecycleService;
+    private final Optional<ApiLimitTracker> apiLimitTracker;
 
     public JobCompletionNotificationListener(SalesforceService salesforceService,
                                             ApplicationContext applicationContext,
                                             BackupStatisticsService statisticsService,
                                             Environment environment,
-                                            Optional<RdsLifecycleService> rdsLifecycleService) {
+                                            Optional<RdsLifecycleService> rdsLifecycleService,
+                                            Optional<ApiLimitTracker> apiLimitTracker) {
         this.salesforceService = salesforceService;
         this.applicationContext = applicationContext;
         this.statisticsService = statisticsService;
         this.environment = environment;
         this.rdsLifecycleService = rdsLifecycleService;
+        this.apiLimitTracker = apiLimitTracker;
     }
 
     private boolean isWebMode() {
@@ -96,6 +100,12 @@ public class JobCompletionNotificationListener implements JobExecutionListener {
             log.info("BACKUP JOB SUMMARY");
             log.info("=".repeat(80));
             log.info(summary);
+            apiLimitTracker.ifPresent(tracker -> {
+                tracker.logCurrentUsage();
+                if (tracker.isLimitReached()) {
+                    log.warn("API LIMIT WAS REACHED during this run - some objects may have been skipped");
+                }
+            });
             log.info("=".repeat(80));
 
             // In web mode, don't exit - keep the web server running
@@ -131,6 +141,12 @@ public class JobCompletionNotificationListener implements JobExecutionListener {
             log.info("BACKUP JOB SUMMARY (FAILED)");
             log.info("=".repeat(80));
             log.info(summary);
+            apiLimitTracker.ifPresent(tracker -> {
+                tracker.logCurrentUsage();
+                if (tracker.isLimitReached()) {
+                    log.warn("API LIMIT WAS REACHED during this run - some objects may have been skipped");
+                }
+            });
             log.info("=".repeat(80));
 
             // In web mode, don't exit - keep the web server running

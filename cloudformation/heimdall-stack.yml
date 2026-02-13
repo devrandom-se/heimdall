@@ -430,6 +430,8 @@ Resources:
               Value: heimdall
             - Name: RDS_INSTANCE_IDENTIFIER
               Value: !Sub ${AWS::StackName}-db
+            - Name: HEIMDALL_API_LIMIT_STOP_AT_PERCENT
+              Value: "50"
           Secrets:
             - Name: POSTGRES_PASSWORD
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/rds/password

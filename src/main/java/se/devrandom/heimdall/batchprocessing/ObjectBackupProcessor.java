@@ -26,6 +26,8 @@ import se.devrandom.heimdall.salesforce.objects.*;
 import se.devrandom.heimdall.storage.BackupStatisticsService;
 import se.devrandom.heimdall.storage.PostgresService;
 
+import se.devrandom.heimdall.salesforce.ApiLimitTracker;
+
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
@@ -33,6 +35,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
 
@@ -234,6 +237,13 @@ public class ObjectBackupProcessor
         log.trace("Processing Heimdall_Backup_Config__c {} (Status__c: {})",
                 backup.getObjectName__c(), backup.getStatus__c());
 
+        // Check API limit before processing this object
+        Optional<ApiLimitTracker> tracker = salesforceService.getApiLimitTracker();
+        if (tracker.isPresent() && tracker.get().isLimitReached()) {
+            log.warn("API limit reached - skipping backup for {}", backup.getObjectName__c());
+            return null;
+        }
+
         // Skip if not marked for backup
         if (!backup.getStatus__c().equals(Heimdall_Backup_Config__c.BACKUP)) {
             log.debug("Skipping {} (Status: {})", backup.getObjectName__c(), backup.getStatus__c());
@@ -296,6 +306,8 @@ public class ObjectBackupProcessor
     private DescribeSObjectResult executeBackup(Heimdall_Backup_Config__c backup, String objectName,
             String lastModstamp, String lastId, String lastModstampDeleted, String lastIdDeleted) {
 
+        Optional<ApiLimitTracker> tracker = salesforceService.getApiLimitTracker();
+
         // Describe the object to get field metadata
         DescribeSObjectResult describe = salesforceService.describeSObject(objectName);
 
@@ -325,6 +337,12 @@ public class ObjectBackupProcessor
         // PHASE 1: Fetch all active records first (with pipeline optimization)
         log.info("Starting PHASE 1: Fetching active records for {} (pipeline-optimized)", objectName);
         while (true) {
+            // Check API limit before each batch
+            if (tracker.isPresent() && tracker.get().isLimitReached()) {
+                log.warn("API limit reached - stopping active records fetch for {} after {} batches", objectName, batchCounter);
+                break;
+            }
+
             batchCounter++;
             log.info("Starting active records batch {} for {}", batchCounter, objectName);
 
@@ -402,6 +420,12 @@ public class ObjectBackupProcessor
             CompletableFuture<BulkQueryRequest> nextDeletedQueryFuture = null;
 
             while (true) {
+                // Check API limit before each batch
+                if (tracker.isPresent() && tracker.get().isLimitReached()) {
+                    log.warn("API limit reached - stopping deleted records fetch for {} after {} batches", objectName, deletedBatchCounter);
+                    break;
+                }
+
                 deletedBatchCounter++;
                 log.info("Starting deleted records batch {} for {}", deletedBatchCounter, objectName);
 

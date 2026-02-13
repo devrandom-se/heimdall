@@ -92,6 +92,7 @@ public class SalesforceService {
     private final int skipFilesBelowKb;
     private final Set<String> globalChecksumCache;
     private final Map<String, Set<String>> referenceFieldsCache = new ConcurrentHashMap<>();
+    private final Optional<ApiLimitTracker> apiLimitTracker;
 
     private Map<String, Heimdall_Backup_Config__c> downloadObjectBackupRecords() {
         Map<String, Heimdall_Backup_Config__c> resultMap = new HashMap<>();
@@ -134,7 +135,8 @@ public class SalesforceService {
                              S3Service s3Service, PostgresService postgresService,
                              BackupStatisticsService statisticsService,
                              @Value("${heimdall.backup.skip-files-below-kb:0}") int skipFilesBelowKb,
-                             @Value("${heimdall.metadata.auto-migrate:true}") boolean autoMigrateMetadata) {
+                             @Value("${heimdall.metadata.auto-migrate:true}") boolean autoMigrateMetadata,
+                             Optional<ApiLimitTracker> apiLimitTracker) {
         this.webClient = webClient;
         this.salesforceCredentials = salesforceCredentials;
         this.s3Service = s3Service;
@@ -142,8 +144,12 @@ public class SalesforceService {
         this.statisticsService = statisticsService;
         this.skipFilesBelowKb = skipFilesBelowKb;
         this.globalChecksumCache = ConcurrentHashMap.newKeySet();
+        this.apiLimitTracker = apiLimitTracker;
 
         salesforceAccessToken = loginToSalesforce();
+
+        // Initialize API limit tracker from /limits endpoint
+        apiLimitTracker.ifPresent(this::initializeApiLimits);
 
         // Auto-migrate schema if enabled
         if (autoMigrateMetadata) {
@@ -164,6 +170,29 @@ public class SalesforceService {
 
         // Preload checksum cache from database for instant deduplication
         preloadChecksumCacheFromDatabase();
+    }
+
+    private void initializeApiLimits(ApiLimitTracker tracker) {
+        try {
+            String uri = String.format("/services/data/%s/limits", salesforceCredentials.getApiVersion());
+            String responseBody = webClient.get()
+                    .uri(uri)
+                    .headers(h -> h.setBearerAuth(salesforceAccessToken.accessToken))
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
+            if (responseBody != null) {
+                JSONObject limits = new JSONObject(responseBody);
+                JSONObject dailyApi = limits.getJSONObject("DailyApiRequests");
+                long max = dailyApi.getLong("Max");
+                long remaining = dailyApi.getLong("Remaining");
+                long currentUsed = max - remaining;
+                tracker.initialize(currentUsed, max);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to fetch API limits from Salesforce: {}. API limit tracking will be disabled.", e.getMessage());
+        }
     }
 
     /**
@@ -1064,6 +1093,13 @@ public class SalesforceService {
                                             log.warn("Failed to parse Sforce-NumberOfRecords header: {}", numRecordsValue);
                                         }
                                     }
+                                    // Update API limit tracker from response header
+                                    apiLimitTracker.ifPresent(tracker -> {
+                                        List<String> limitHeader = response.headers().header("Sforce-Limit-Info");
+                                        if (!limitHeader.isEmpty()) {
+                                            tracker.updateFromHeader(limitHeader.get(0));
+                                        }
+                                    });
                                     return response.bodyToFlux(DataBuffer.class);
                                 } else {
                                     log.error(response.createException().toString());
@@ -1250,6 +1286,13 @@ public class SalesforceService {
                                                     log.warn("Failed to parse Sforce-NumberOfRecords header: {}", numRecordsValue);
                                                 }
                                             }
+                                            // Update API limit tracker from response header
+                                            apiLimitTracker.ifPresent(tracker -> {
+                                                List<String> limitHeader = response.headers().header("Sforce-Limit-Info");
+                                                if (!limitHeader.isEmpty()) {
+                                                    tracker.updateFromHeader(limitHeader.get(0));
+                                                }
+                                            });
                                             return response.bodyToFlux(DataBuffer.class);
                                         } else {
                                             log.error(response.createException().toString());
@@ -1552,9 +1595,20 @@ public class SalesforceService {
 
             List<FutureWithMetadata> futures = new ArrayList<>();
             int globalCacheHits = 0;
+            int submittedCount = 0;
+            boolean apiLimitStopped = false;
 
             // Submit all tasks
             for (ContentVersionRecord record : records) {
+                // Check API limit every 100 submissions
+                if (submittedCount > 0 && submittedCount % 100 == 0
+                        && apiLimitTracker.isPresent() && apiLimitTracker.get().isLimitReached()) {
+                    log.warn("API limit reached - stopping ContentVersion downloads after {} submissions ({} in-flight tasks will complete)",
+                            submittedCount, futures.size());
+                    apiLimitStopped = true;
+                    break;
+                }
+
                 statisticsService.incrementContentVersionTotal();
 
                 // Skip deleted records
@@ -1598,10 +1652,17 @@ public class SalesforceService {
                         s3Service,
                         statisticsService,
                         skipFilesBelowKb,
-                        globalChecksumCache
+                        globalChecksumCache,
+                        apiLimitTracker.orElse(null)
                 );
 
                 futures.add(new FutureWithMetadata(executor.submit(task), record.recordId(), systemModstamp));
+                submittedCount++;
+            }
+
+            if (apiLimitStopped) {
+                log.warn("ContentVersion processing stopped early due to API limit - {} of {} records submitted",
+                        submittedCount, records.size());
             }
 
             log.info("Global cache optimization: {} checksums skipped without S3 HEAD (cache size: {})",
@@ -2068,5 +2129,9 @@ public class SalesforceService {
 
     public Map<String, Heimdall_Backup_Config__c> getObjectBackup__cMap() {
         return objectBackup__cMap;
+    }
+
+    public Optional<ApiLimitTracker> getApiLimitTracker() {
+        return apiLimitTracker;
     }
 }
