@@ -469,6 +469,14 @@ public class ObjectBackupProcessor
         log.info("Completed backup for {} - Total: {} records ({} active, {} deleted) in {} batches",
                 objectName, grandTotal, totalRecords, totalDeletedRecords, batchCounter);
 
+        // Log resource usage after each object
+        Runtime rt = Runtime.getRuntime();
+        long usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
+        long maxMb = rt.maxMemory() / (1024 * 1024);
+        int cpus = rt.availableProcessors();
+        log.info("Resource usage: heap {} MB / {} MB ({}%), CPUs: {}",
+                usedMb, maxMb, maxMb > 0 ? usedMb * 100 / maxMb : 0, cpus);
+
         // PHASE 3: Archive old records if configured
         if (Boolean.TRUE.equals(backup.getArchive__c()) && backup.getArchive_Age_Days__c() != null
                 && !"ContentVersion".equals(objectName)) {
