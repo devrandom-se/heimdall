@@ -37,6 +37,8 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
 
 **RDS Lifecycle Management** (optional): When running on AWS with an RDS database, Heimdall automatically starts the database before use and stops it after — reducing costs from ~$50/month to a few dollars.
 
+**API Limit Protection** (optional): Monitors Salesforce org API usage and stops backup gracefully when a configurable percentage of the daily limit is reached. Safe across restarts — uses an absolute threshold against the org's actual usage, not a per-run budget. Set `HEIMDALL_API_LIMIT_STOP_AT_PERCENT=50` to stop when the org hits 50% of its daily API limit.
+
 ## Features
 
 - **Incremental backups** with checkpoint resume (survives crashes, OOM kills, restarts)
@@ -47,6 +49,7 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
 - **Deleted records browser** with restore capability
 - **Field-by-field diff** between any two record versions
 - **Related records and files** shown on the unified record page
+- **API limit protection** — stops gracefully before exceeding configurable daily API usage threshold
 - **S3-compatible storage** (AWS S3, MinIO, Backblaze B2, etc.)
 - **Salesforce metadata auto-migration** (creates backup config objects automatically)
 
@@ -222,6 +225,7 @@ SALESFORCE_JWT_KEY_FILE=/path/to/private.key
 | `HEIMDALL_SKIP_FILES_BELOW_KB` | `0` | Skip small ContentVersion files |
 | `HEIMDALL_METADATA_AUTO_MIGRATE` | `true` | Auto-create SF metadata objects |
 | `RDS_INSTANCE_IDENTIFIER` | _(empty)_ | RDS instance for auto-start/stop |
+| `HEIMDALL_API_LIMIT_STOP_AT_PERCENT` | _(empty)_ | Stop backup at N% of daily API limit |
 
 ## Docker
 
