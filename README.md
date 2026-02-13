@@ -270,6 +270,8 @@ See [ROADMAP.md](ROADMAP.md) for planned features including pluggable storage ba
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
+Test coverage is minimal — adding tests is a great way to get familiar with the codebase and make a meaningful first contribution.
+
 ## License
 
 **GNU Affero General Public License v3.0 (AGPL-3.0)**
