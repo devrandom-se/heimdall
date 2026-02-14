@@ -2,14 +2,33 @@
 # Start an SSM port-forwarding tunnel to the RDS database via the bastion host.
 # The bastion instance and RDS are started automatically if stopped.
 #
-# Usage: ./db-tunnel.sh [stack-name] [shutdown]
+# Usage: ./db-tunnel.sh [stack-name] [-p profile] [shutdown]
 # Example: ./db-tunnel.sh heimdall
-# Example: ./db-tunnel.sh heimdall shutdown
+# Example: ./db-tunnel.sh heimdall -p my-account
+# Example: ./db-tunnel.sh heimdall -p my-account shutdown
 
 set -e
 
 STACK_NAME="${1:-heimdall}"
-ACTION="${2:-}"
+shift || true
+
+# Parse optional flags
+AWS_PROFILE_ARG=""
+ACTION=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--profile)
+      export AWS_PROFILE="$2"
+      AWS_PROFILE_ARG="--profile $2"
+      shift 2
+      ;;
+    *)
+      ACTION="$1"
+      shift
+      ;;
+  esac
+done
+
 AWS_REGION="${AWS_REGION:-eu-north-1}"
 
 echo "Fetching stack outputs from ${STACK_NAME}..."
