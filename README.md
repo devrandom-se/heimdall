@@ -46,7 +46,7 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
 - **Dynamic batch sizing** that adapts to API response times (50K-200K records)
 - **Record archiving** with configurable age threshold and SOQL expression filters
 - **Version history** across monthly backup periods
-- **Deleted records browser** with restore capability
+- **Deleted records browser** (restore API not yet implemented — UI buttons are stubs)
 - **Field-by-field diff** between any two record versions
 - **Related records and files** shown on the unified record page
 - **API limit protection** — stops gracefully before exceeding configurable daily API usage threshold
