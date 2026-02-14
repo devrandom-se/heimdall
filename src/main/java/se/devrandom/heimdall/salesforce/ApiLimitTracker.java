@@ -19,8 +19,8 @@ package se.devrandom.heimdall.salesforce;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -28,7 +28,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
-@ConditionalOnProperty(name = "heimdall.api-limit.stop-at-percent", matchIfMissing = false)
+@ConditionalOnExpression("!'${heimdall.api-limit.stop-at-percent:}'.isEmpty()")
 public class ApiLimitTracker {
     private static final Logger log = LoggerFactory.getLogger(ApiLimitTracker.class);
 

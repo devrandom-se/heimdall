@@ -20,7 +20,7 @@ package se.devrandom.heimdall.storage;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
@@ -28,7 +28,7 @@ import software.amazon.awssdk.services.rds.RdsClient;
 import software.amazon.awssdk.services.rds.model.*;
 
 @Service
-@ConditionalOnProperty(name = "rds.instance-identifier", matchIfMissing = false)
+@ConditionalOnExpression("!'${rds.instance-identifier:}'.isEmpty()")
 public class RdsLifecycleService {
     private static final Logger log = LoggerFactory.getLogger(RdsLifecycleService.class);
 
