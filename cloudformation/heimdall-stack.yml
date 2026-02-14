@@ -145,24 +145,9 @@ Resources:
             NoncurrentVersionExpiration:
               NoncurrentDays: 90
 
-  #############################################
-  # SSM Parameter Store (free tier)
-  #############################################
-  RDSPasswordParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub /${AWS::StackName}/rds/password
-      Type: String
-      Value: "CHANGE_ME_via_set-secrets.sh"
-      Description: "Placeholder - run set-secrets.sh to set real value as SecureString"
-
-  SalesforceClientSecretParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub /${AWS::StackName}/salesforce/client-secret
-      Type: String
-      Value: "CHANGE_ME_via_set-secrets.sh"
-      Description: Salesforce Connected App Client Secret
+  # SSM Parameters for secrets are NOT managed by CloudFormation to avoid
+  # overwriting real values on stack updates. Create them with set-secrets.sh:
+  #   ./set-secrets.sh <stack-name> <db-password> <salesforce-client-secret>
 
   #############################################
   # Security Groups
@@ -758,6 +743,54 @@ Resources:
                   - ecr:CompleteLayerUpload
                 Resource: !GetAtt ECRRepository.Arn
 
+  #############################################
+  # DB Tunnel User (for db-tunnel.sh)
+  #############################################
+  DBTunnelUser:
+    Type: AWS::IAM::User
+    Condition: BastionEnabled
+    Properties:
+      UserName: !Sub ${AWS::StackName}-db-tunnel-user
+      Policies:
+        - PolicyName: DBTunnelPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:StartSession
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${BastionInstance}
+                  - !Sub arn:aws:ssm:${AWS::Region}::document/AWS-StartPortForwardingSessionToRemoteHost
+              - Effect: Allow
+                Action:
+                  - ssm:TerminateSession
+                  - ssm:ResumeSession
+                Resource:
+                  - "arn:aws:ssm:*:*:session/${aws:username}-*"
+              - Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${BastionInstance}
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - rds:StartDBInstance
+                  - rds:StopDBInstance
+                  - rds:DescribeDBInstances
+                Resource:
+                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+
 Conditions:
   ScheduleEnabled: !Equals [!Ref EnableScheduledBackup, "true"]
   BastionEnabled: !Equals [!Ref EnableBastion, "true"]
@@ -823,6 +856,11 @@ Outputs:
   ECRPushUserName:
     Description: IAM user for pushing to ECR
     Value: !Ref ECRPushUser
+
+  DBTunnelUserName:
+    Condition: BastionEnabled
+    Description: "IAM user for db-tunnel.sh (create access key: aws iam create-access-key --user-name <value>)"
+    Value: !Ref DBTunnelUser
 
   RDSPasswordParameterName:
     Description: SSM Parameter for RDS password
