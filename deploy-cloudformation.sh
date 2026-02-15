@@ -151,7 +151,7 @@ if [ -z "$SF_CLIENT_ID" ]; then
   exit 1
 fi
 
-read -rsp "Salesforce Client Secret: " SF_CLIENT_SECRET
+read -rsp "Salesforce Client Secret (input hidden): " SF_CLIENT_SECRET
 echo
 if [ -z "$SF_CLIENT_SECRET" ]; then
   echo "Error: Salesforce Client Secret is required."
@@ -159,12 +159,16 @@ if [ -z "$SF_CLIENT_SECRET" ]; then
 fi
 
 # ──────────────────────────────────────────────
-# 5. Generate random DB password
+# 5. DB password
 # ──────────────────────────────────────────────
 
-DB_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
 echo
-echo "Generated random DB password (32 chars, alphanumeric)."
+read -rsp "DB password (leave empty to auto-generate): " DB_PASSWORD
+echo
+if [ -z "$DB_PASSWORD" ]; then
+  DB_PASSWORD=$(openssl rand -hex 16)
+  echo "Generated random DB password (32 hex chars)."
+fi
 
 # ──────────────────────────────────────────────
 # Summary and confirmation
@@ -195,7 +199,7 @@ fi
 
 echo
 echo "Creating SSM parameters..."
-AWS_REGION="$AWS_REGION" "$SCRIPT_DIR/set-secrets.sh" "$STACK_NAME" "$DB_PASSWORD" "$SF_CLIENT_SECRET" --skip-rds
+AWS_REGION="$AWS_REGION" bash "$SCRIPT_DIR/set-secrets.sh" "$STACK_NAME" "$DB_PASSWORD" "$SF_CLIENT_SECRET" --skip-rds
 
 # ──────────────────────────────────────────────
 # 7. Deploy CloudFormation stack

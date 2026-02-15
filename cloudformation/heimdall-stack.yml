@@ -85,7 +85,7 @@ Parameters:
   # GUI Authentication (optional - enables secure web interface)
   EnableBastion:
     Type: String
-    Default: "true"
+    Default: "false"
     AllowedValues:
       - "true"
       - "false"

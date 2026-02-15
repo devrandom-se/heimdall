@@ -103,8 +103,14 @@ if [ -n "$DEPLOYING_USER" ] && [ "$DEPLOYING_USER" != "$EXECUTION_USER" ]; then
   fi
 fi
 
+ORG_ID=$(sf org display "${TARGET_ORG[@]}" --json 2>/dev/null | jq -r '.result.id // empty')
+INSTANCE_URL=$(sf org display "${TARGET_ORG[@]}" --json 2>/dev/null | jq -r '.result.instanceUrl // empty')
+
+echo ""
+echo "Org ID:       $ORG_ID"
+echo "Instance URL: $INSTANCE_URL"
 echo ""
 echo "Next steps:"
 echo "  1. Go to Setup > External Client Apps > Heimdall Backup"
 echo "  2. Note the Consumer Key and Consumer Secret"
-echo "  3. Run set-secrets.sh to store the client secret in AWS SSM"
+echo "  3. Run ./deploy-cloudformation.sh to deploy AWS infrastructure"
