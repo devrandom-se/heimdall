@@ -15,20 +15,20 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
                           ┌──────────────────────────────────────┐
                           │            Heimdall                  │
                           │                                      │
-┌──────────────┐   Bulk   │  ┌────────────┐    ┌─────────────┐  │
-│              │   API    │  │   Batch    │    │  Restore    │  │
-│  Salesforce  │◄────────►│  │   Mode     │    │  GUI        │  │
-│              │          │  │ (scheduled)│    │ (web mode)  │  │
-└──────────────┘          │  └─────┬──────┘    └──────┬──────┘  │
+┌──────────────┐   Bulk   │  ┌────────────┐    ┌─────────────┐   │
+│              │   API    │  │   Batch    │    │  Restore    │   │
+│  Salesforce  │◄────────►│  │   Mode     │    │  GUI        │   │
+│              │          │  │ (scheduled)│    │ (web mode)  │   │
+└──────────────┘          │  └─────┬──────┘    └──────┬──────┘   │
                           │        │                   │         │
                           └────────┼───────────────────┼─────────┘
                                    │                   │
-                          ┌────────▼───────┐  ┌───────▼────────┐
-                          │   PostgreSQL   │  │     AWS S3     │
-                          │  (metadata,    │  │  (CSV files,   │
+                          ┌────────▼───────┐  ┌───────▼─────────┐
+                          │   PostgreSQL   │  │     AWS S3      │
+                          │  (metadata,    │  │  (CSV files,    │
                           │   versions,    │  │   ContentVersion│
-                          │   checkpoints) │  │   binaries)    │
-                          └────────────────┘  └────────────────┘
+                          │   checkpoints) │  │   binaries)     │
+                          └────────────────┘  └─────────────────┘
 ```
 
 **Batch Mode** runs as a scheduled ECS Fargate task (or k8s cron job, or standalone). It queries every object in your org via the Bulk API, stores record metadata in PostgreSQL, and uploads full CSV data to S3. ContentVersion files are deduplicated by checksum.
@@ -120,7 +120,20 @@ This creates:
 
 After deploy, go to **Setup > External Client Apps > Heimdall Backup** and note the **Consumer Key** and **Consumer Secret**.
 
-### 2. Create CloudFormation Stack
+### 2. Deploy AWS Infrastructure
+
+#### Quick Deploy
+
+```bash
+# One-command deployment (interactive — handles stack, secrets, and RDS)
+./deploy-cloudformation.sh
+```
+
+This auto-detects your VPC/subnets, prompts for Salesforce config, generates a DB password, creates the CloudFormation stack, sets SSM secrets, and stops RDS to save costs. Skip to step 3 when done.
+
+#### Manual Deploy
+
+##### Create CloudFormation Stack
 
 The stack name is used as prefix for all resources (e.g. `heimdall` creates `heimdall-db`, `heimdall-cluster`, etc.). Deploy one stack per Salesforce org.
 
@@ -134,15 +147,14 @@ aws cloudformation create-stack \
     ParameterKey=SubnetIds,ParameterValue="subnet-aaa\,subnet-bbb" \
     ParameterKey=SalesforceInstanceUrl,ParameterValue=https://mycompany.my.salesforce.com \
     ParameterKey=SalesforceOrgId,ParameterValue=00Dxxxxxxxxxxxxxxx \
-    ParameterKey=SalesforceClientId,ParameterValue=3MVG9... \
-    ParameterKey=DBPassword,ParameterValue=your-db-password
+    ParameterKey=SalesforceClientId,ParameterValue=3MVG9...
 ```
 
 This creates: S3 bucket, RDS PostgreSQL (db.t4g.medium), ECS cluster, ECR repository, EventBridge schedule, and SSM parameters.
 
 > **Tip:** Use the default VPC's public subnets (minimum 2 for RDS). No NAT gateway or VPC endpoints needed — ECS tasks get public IPs for outbound traffic, and RDS is not publicly accessible.
 
-### 3. Set Secrets
+##### Set Secrets
 
 The stack creates SSM parameters with placeholder values. Update them with real credentials as SecureString:
 
@@ -150,13 +162,9 @@ The stack creates SSM parameters with placeholder values. Update them with real 
 ./set-secrets.sh heimdall "your-db-password" "sf-consumer-secret-from-step-1"
 ```
 
-### 4. Build and Push Docker Image
+This also updates the RDS master password automatically. Use `--skip-rds` if the RDS instance doesn't exist yet.
 
-```bash
-./build-and-push.sh
-```
-
-### 5. Stop RDS Until First Backup
+##### Stop RDS Until First Backup
 
 The database is only needed during backups and GUI sessions. Stop it to save costs until the first scheduled backup starts it automatically:
 
@@ -165,6 +173,12 @@ aws rds stop-db-instance --db-instance-identifier heimdall-db
 ```
 
 The backup schedule (default: daily at 18:00 UTC) will auto-start the database, run the backup, and stop it again.
+
+### 3. Build and Push Docker Image
+
+```bash
+./build-and-push.sh
+```
 
 ### What it Costs
 
@@ -178,6 +192,7 @@ The stack is designed for minimal cost:
 
 | Script | Purpose |
 |--------|---------|
+| `deploy-cloudformation.sh` | One-command AWS deployment (stack + secrets) |
 | `set-secrets.sh` | Store DB password and SF client secret in SSM as SecureString |
 | `sf-metadata/deploy.sh` | Deploy Salesforce metadata (custom object + External Client App) |
 | `build-and-push.sh` | Build Docker image and push to ECR |
