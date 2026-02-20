@@ -475,9 +475,15 @@
                     document.getElementById('restore-selected-btn').style.display = 'none';
                     document.getElementById('compare-close-btn').textContent = 'Close';
                 } else {
-                    document.getElementById('compare-modal-body').insertAdjacentHTML('afterbegin',
-                        '<div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">' +
-                        '<strong>Restore failed:</strong> ' + escapeHtml(data.error) + '</div>');
+                    var formatted = formatSalesforceError(data.error);
+                    var parts = formatted.split('\n\nTip: ');
+                    var errHtml = '<div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">' +
+                        '<strong>Restore failed:</strong> ' + escapeHtml(parts[0]) + '</div>';
+                    if (parts.length > 1) {
+                        errHtml += '<div class="slds-box slds-box_x-small slds-m-bottom_small" style="background:#e8f4fd;border-color:#0070d2;">' +
+                            '<p style="color:#0070d2;"><strong>Tip:</strong> ' + escapeHtml(parts[1]) + '</p></div>';
+                    }
+                    document.getElementById('compare-modal-body').insertAdjacentHTML('afterbegin', errHtml);
                     document.getElementById('restore-selected-btn').disabled = false;
                     document.getElementById('restore-selected-btn').textContent = 'Restore Selected Fields';
                 }

@@ -33,6 +33,20 @@
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1rem;
         }
+        .slds-modal { pointer-events: none; }
+        .slds-backdrop { pointer-events: none; }
+        .slds-modal.slds-fade-in-open { pointer-events: auto; }
+        .slds-backdrop.slds-backdrop_open { pointer-events: auto; }
+        .rm-batch-item { padding: 0.4rem 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .rm-batch-item:last-child { border-bottom: none; }
+        .rm-steps { display: flex; align-items: center; padding: 0.75rem 1rem 0.25rem; }
+        .rm-step-dot { width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 2px solid #d8dde6; background: #fff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .rm-step-dot.done { background: #0070d2; border-color: #0070d2; }
+        .rm-step-dot.active { border-color: #0070d2; box-shadow: 0 0 0 3px rgba(0,112,210,0.25); }
+        .rm-step-line { flex: 1; height: 2px; background: #d8dde6; }
+        .rm-step-line.done { background: #0070d2; }
+        .rm-step-group { display: flex; flex-direction: column; align-items: center; }
+        .rm-step-label { font-size: 0.7rem; color: #706e6b; margin-top: 0.25rem; }
     </style>
 </head>
 <body>
@@ -86,6 +100,25 @@
     </footer>
 
     <script>
+        function formatSalesforceError(errorString) {
+            if (!errorString) return errorString;
+            var tips = {
+                'INVALID_CROSS_REFERENCE_KEY': 'A reference field points to a record that doesn\'t exist in the sandbox. Check lookup fields (especially OwnerId) and clear or update invalid ones.',
+                'DUPLICATES_DETECTED': 'A duplicate rule is blocking this record. Review and deactivate the blocking duplicate rule in sandbox Setup.',
+                'REQUIRED_FIELD_MISSING': 'A required field is empty. Fill in the required field(s) listed above.',
+                'FIELD_INTEGRITY_EXCEPTION': 'A field value is invalid (wrong format, too long, or violates a validation rule).',
+                'INACTIVE_OWNER_OR_USER': 'OwnerId references an inactive user. Search for an active user using the lookup search.',
+                'INSUFFICIENT_ACCESS': 'The connected app user doesn\'t have permission to create/update this object.',
+                'STRING_TOO_LONG': 'A text field exceeds its maximum length. Shorten the value.'
+            };
+            for (var code in tips) {
+                if (errorString.indexOf(code) !== -1) {
+                    return errorString + '\n\nTip: ' + tips[code];
+                }
+            }
+            return errorString;
+        }
+
         var heimdallCart = {
             KEY: 'heimdallRestoreCart',
             getItems: function() {
@@ -132,6 +165,283 @@
         document.addEventListener('DOMContentLoaded', function() {
             heimdallCart.updateBadge();
         });
+    </script>
+
+    <!-- Restore Modal -->
+    <section id="restore-modal" class="slds-modal" role="dialog" tabindex="-1" aria-modal="true">
+        <div class="slds-modal__container" style="max-width:36rem;">
+            <header class="slds-modal__header">
+                <button id="restore-modal-close" class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" onclick="heimdallRestoreModal.close()">
+                    <svg class="slds-button__icon slds-button__icon_large" viewBox="0 0 52 52">
+                        <path fill="currentColor" d="M31 25.4l13-13c.6-.6.6-1.6 0-2.1l-2.1-2.1c-.6-.6-1.6-.6-2.1 0L26.4 21.6c-.4.4-1 .4-1.4 0L11.4 8.2c-.6-.6-1.5-.6-2.1 0L7.2 10.3c-.6.6-.6 1.5 0 2.1l13.5 13.4c.4.4.4 1 0 1.4L7.2 40.6c-.6.6-.6 1.5 0 2.1l2.1 2.1c.6.6 1.5.6 2.1 0l13.4-13.4c.4-.4 1-.4 1.4 0l13.5 13.4c.6.6 1.5.6 2.1 0l2.1-2.1c.6-.6.6-1.5 0-2.1L31 26.8c-.5-.4-.5-1-.1-1.4z"/>
+                    </svg>
+                </button>
+                <h2 id="restore-modal-title" class="slds-modal__title">Restore Record</h2>
+                <div id="restore-modal-progress"></div>
+            </header>
+            <div id="restore-modal-body" class="slds-modal__content slds-p-around_medium"></div>
+            <footer id="restore-modal-footer" class="slds-modal__footer"></footer>
+        </div>
+    </section>
+    <div id="restore-modal-backdrop" class="slds-backdrop"></div>
+
+    <script>
+        var heimdallRestoreModal = {
+            _opts: null,
+            _esc: function(str) {
+                if (!str && str !== 0 && str !== false) return '';
+                var div = document.createElement('div');
+                div.appendChild(document.createTextNode(String(str)));
+                return div.innerHTML;
+            },
+            _progressHtml: function(step) {
+                var checkSvg = '<svg viewBox="0 0 52 52" style="width:0.75rem;height:0.75rem;"><path fill="#fff" d="M19.1 42.5L2.6 25.9c-.6-.6-.6-1.6 0-2.2l2.2-2.2c.6-.6 1.6-.6 2.2 0L19.4 34c.4.4 1 .4 1.4 0L45 8.6c.6-.6 1.6-.6 2.2 0l2.2 2.2c.6.6.6 1.6 0 2.2L21.3 42.5c-.6.7-1.6.7-2.2 0z"/></svg>';
+                var labels = ['Confirm', 'Restoring', 'Done'];
+                var html = '<ol class="slds-progress__list">';
+                for (var i = 0; i < 3; i++) {
+                    var cls = 'slds-progress__item';
+                    var marker;
+                    if (i < step - 1 || (step === 3 && i === 2)) {
+                        cls += ' slds-is-completed';
+                        marker = '<span class="slds-progress__marker slds-progress__marker_icon">' + checkSvg + '</span>';
+                    } else if (i === step - 1) {
+                        cls += ' slds-is-active';
+                        marker = '<span class="slds-progress__marker"><span class="slds-assistive-text">' + labels[i] + '</span></span>';
+                    } else {
+                        marker = '<span class="slds-progress__marker"><span class="slds-assistive-text">' + labels[i] + '</span></span>';
+                    }
+                    html += '<li class="' + cls + '">' + marker + '</li>';
+                }
+                html += '</ol>';
+                var pct = step === 1 ? '0' : step === 2 ? '50' : '100';
+                html += '<div class="slds-progress-bar" role="progressbar"><span class="slds-progress-bar__value" style="width:' + pct + '%"></span></div>';
+                return html;
+            },
+            _spinnerHtml: function() {
+                return '<div class="slds-align_absolute-center slds-p-around_large">' +
+                    '<div class="slds-spinner_container" style="position:relative;min-height:4rem;">' +
+                    '<div class="slds-spinner slds-spinner_medium" role="status"><span class="slds-assistive-text">Restoring</span>' +
+                    '<div class="slds-spinner__dot-a"></div><div class="slds-spinner__dot-b"></div></div></div></div>';
+            },
+            _resultIcon: function(success) {
+                if (success) {
+                    return '<span style="background:#2e844a;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;width:3rem;height:3rem;">' +
+                        '<svg viewBox="0 0 52 52" style="width:1.5rem;height:1.5rem;"><path fill="#fff" d="M19.1 42.5L2.6 25.9c-.6-.6-.6-1.6 0-2.2l2.2-2.2c.6-.6 1.6-.6 2.2 0L19.4 34c.4.4 1 .4 1.4 0L45 8.6c.6-.6 1.6-.6 2.2 0l2.2 2.2c.6.6.6 1.6 0 2.2L21.3 42.5c-.6.7-1.6.7-2.2 0z"/></svg></span>';
+                }
+                return '<span style="background:#ea001e;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;width:3rem;height:3rem;">' +
+                    '<svg viewBox="0 0 52 52" style="width:1.5rem;height:1.5rem;"><path fill="#fff" d="M31 25.4l13-13c.6-.6.6-1.6 0-2.1l-2.1-2.1c-.6-.6-1.6-.6-2.1 0L26.4 21.6c-.4.4-1 .4-1.4 0L11.4 8.2c-.6-.6-1.5-.6-2.1 0L7.2 10.3c-.6.6-.6 1.5 0 2.1l13.5 13.4c.4.4.4 1 0 1.4L7.2 40.6c-.6.6-.6 1.5 0 2.1l2.1 2.1c.6.6 1.5.6 2.1 0l13.4-13.4c.4-.4 1-.4 1.4 0l13.5 13.4c.6.6 1.5.6 2.1 0l2.1-2.1c.6-.6.6-1.5 0-2.1L31 26.8c-.5-.4-.5-1-.1-1.4z"/></svg></span>';
+            },
+            _open: function() {
+                document.getElementById('restore-modal').classList.add('slds-fade-in-open');
+                document.getElementById('restore-modal-backdrop').classList.add('slds-backdrop_open');
+            },
+            close: function() {
+                document.getElementById('restore-modal').classList.remove('slds-fade-in-open');
+                document.getElementById('restore-modal-backdrop').classList.remove('slds-backdrop_open');
+                if (this._opts && this._opts._onDone) this._opts._onDone();
+            },
+
+            // === Single record restore ===
+            show: function(opts) {
+                this._opts = opts;
+                this._opts._onDone = null;
+                document.getElementById('restore-modal-progress').innerHTML = this._progressHtml(1);
+                document.getElementById('restore-modal-title').textContent = 'Restore Record';
+                var name = opts.recordName || opts.recordId;
+                var body = '<div class="slds-text-align_center slds-p-around_medium">' +
+                    '<p class="slds-text-heading_small">Restore <strong>' + this._esc(opts.objectName || '') + '</strong>: ' + this._esc(name) + '?</p></div>';
+                if (opts.warnings && opts.warnings.length > 0) {
+                    body += '<div class="slds-box slds-box_x-small" style="background:#fff8e1;border-color:#fe9339;">' +
+                        '<p class="slds-text-title_bold" style="color:#fe9339;">' + opts.warnings.length + ' field(s) have validation warnings:</p>' +
+                        '<ul style="margin:0.5rem 0 0 1.5rem;">';
+                    var self = this;
+                    opts.warnings.forEach(function(w) { body += '<li>' + self._esc(w) + '</li>'; });
+                    body += '</ul><p class="slds-m-top_small" style="color:#706e6b;">You can proceed anyway, or cancel and fix the fields first.</p></div>';
+                }
+                document.getElementById('restore-modal-body').innerHTML = body;
+                document.getElementById('restore-modal-footer').innerHTML =
+                    '<button class="slds-button slds-button_neutral" onclick="heimdallRestoreModal.close()">Cancel</button> ' +
+                    '<button class="slds-button slds-button_brand" onclick="heimdallRestoreModal._doRestore()">Restore</button>';
+                document.getElementById('restore-modal-close').style.display = '';
+                this._open();
+            },
+            _doRestore: function() {
+                document.getElementById('restore-modal-progress').innerHTML = this._progressHtml(2);
+                document.getElementById('restore-modal-title').textContent = 'Restoring...';
+                document.getElementById('restore-modal-body').innerHTML = this._spinnerHtml();
+                document.getElementById('restore-modal-footer').innerHTML = '';
+                document.getElementById('restore-modal-close').style.display = 'none';
+                var self = this;
+                this._opts.onRestore(function(result) { self._showResult(result); });
+            },
+            _showResult: function(result) {
+                document.getElementById('restore-modal-progress').innerHTML = this._progressHtml(3);
+                document.getElementById('restore-modal-close').style.display = '';
+                var body, footer;
+                if (result.success) {
+                    document.getElementById('restore-modal-title').textContent = 'Restore Complete';
+                    body = '<div class="slds-text-align_center slds-p-around_medium">' + this._resultIcon(true) +
+                        '<p class="slds-text-heading_small slds-m-top_small slds-text-color_success"><strong>Restored successfully!</strong></p>' +
+                        '<p class="slds-m-top_x-small">Record ID: <code>' + this._esc(result.newId) + '</code></p></div>';
+                    if (result.skippedFields && result.skippedFields.length > 0) {
+                        body += '<div class="slds-box slds-box_x-small slds-m-top_small" style="background:#fff8e1;border-color:#fe9339;">' +
+                            '<p class="slds-text-title_bold" style="color:#fe9339;">' + result.skippedFields.length +
+                            ' reference field(s) auto-skipped:</p><ul style="margin:0.5rem 0 0 1.5rem;">';
+                        var self = this;
+                        result.skippedFields.forEach(function(s) { body += '<li>' + self._esc(s) + '</li>'; });
+                        body += '</ul></div>';
+                    }
+                    this._opts._onDone = this._opts.onSuccess || null;
+                    footer = '<button class="slds-button slds-button_brand" onclick="heimdallRestoreModal.close()">Done</button>';
+                } else {
+                    document.getElementById('restore-modal-title').textContent = 'Restore Failed';
+                    var formatted = formatSalesforceError(result.error);
+                    var parts = formatted.split('\n\nTip: ');
+                    body = '<div class="slds-text-align_center slds-p-around_medium">' + this._resultIcon(false) +
+                        '<p class="slds-text-heading_small slds-m-top_small" style="color:#ea001e;"><strong>Restore failed</strong></p></div>' +
+                        '<div class="slds-box slds-box_x-small" style="background:#fef0ef;border-color:#ea001e;">' +
+                        '<p>' + this._esc(parts[0]) + '</p></div>';
+                    if (parts.length > 1) {
+                        body += '<div class="slds-box slds-box_x-small slds-m-top_small" style="background:#e8f4fd;border-color:#0070d2;">' +
+                            '<p style="color:#0070d2;"><strong>Tip:</strong> ' + this._esc(parts[1]) + '</p></div>';
+                    }
+                    if (result.skippedFields && result.skippedFields.length > 0) {
+                        body += '<div class="slds-box slds-box_x-small slds-m-top_small" style="background:#e1f5fe;border-color:#0070d2;">' +
+                            '<p class="slds-text-title_bold" style="color:#0070d2;">' + result.skippedFields.length +
+                            ' reference field(s) auto-skipped:</p><ul style="margin:0.5rem 0 0 1.5rem;">';
+                        var self = this;
+                        result.skippedFields.forEach(function(s) { body += '<li>' + self._esc(s) + '</li>'; });
+                        body += '</ul></div>';
+                    }
+                    footer = '<button class="slds-button slds-button_neutral" onclick="heimdallRestoreModal.close()">Close</button>';
+                }
+                document.getElementById('restore-modal-body').innerHTML = body;
+                document.getElementById('restore-modal-footer').innerHTML = footer;
+            },
+
+            // === Batch restore (cart) ===
+            showBatch: function(opts) {
+                // opts: { items: [{objectName, name, id, period}], getFieldValues: fn(idx), onSuccess }
+                this._opts = opts;
+                this._opts._onDone = null;
+                this._batchResults = [];
+                document.getElementById('restore-modal-progress').innerHTML = this._progressHtml(1);
+                document.getElementById('restore-modal-title').textContent = 'Restore ' + opts.items.length + ' Record(s)';
+                var body = '<div class="slds-p-around_small">';
+                var self = this;
+                opts.items.forEach(function(item, idx) {
+                    body += '<div class="rm-batch-item"><span><strong>' + self._esc(item.objectName) + '</strong>: ' +
+                        self._esc(item.name || item.id) + '</span><span class="slds-badge">Pending</span></div>';
+                });
+                body += '</div>';
+                document.getElementById('restore-modal-body').innerHTML = body;
+                document.getElementById('restore-modal-footer').innerHTML =
+                    '<button class="slds-button slds-button_neutral" onclick="heimdallRestoreModal.close()">Cancel</button> ' +
+                    '<button class="slds-button slds-button_brand" onclick="heimdallRestoreModal._doBatchRestore()">Restore All</button>';
+                document.getElementById('restore-modal-close').style.display = '';
+                this._open();
+            },
+            _doBatchRestore: function() {
+                document.getElementById('restore-modal-progress').innerHTML = this._progressHtml(2);
+                document.getElementById('restore-modal-title').textContent = 'Restoring...';
+                document.getElementById('restore-modal-footer').innerHTML = '';
+                document.getElementById('restore-modal-close').style.display = 'none';
+                this._batchResults = [];
+                this._doBatchItem(0);
+            },
+            _doBatchItem: function(idx) {
+                var opts = this._opts;
+                var items = opts.items;
+                if (idx >= items.length) {
+                    this._showBatchResult();
+                    return;
+                }
+                // Update progress title
+                document.getElementById('restore-modal-title').textContent = 'Restoring ' + (idx + 1) + ' of ' + items.length + '...';
+                // Update item status to spinner
+                var batchItems = document.getElementById('restore-modal-body').querySelectorAll('.rm-batch-item');
+                if (batchItems[idx]) {
+                    var badge = batchItems[idx].querySelector('.slds-badge');
+                    badge.textContent = 'Restoring...';
+                    badge.className = 'slds-badge';
+                }
+                var item = items[idx];
+                var fieldValues = opts.getFieldValues ? opts.getFieldValues(idx) : null;
+                var self = this;
+                fetch('/api/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ recordId: item.id, period: item.period, fieldValues: fieldValues })
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(result) {
+                    self._batchResults.push({ item: item, result: result, idx: idx });
+                    if (batchItems[idx]) {
+                        var badge = batchItems[idx].querySelector('.slds-badge');
+                        if (result.success) {
+                            badge.textContent = 'Restored';
+                            badge.className = 'slds-badge slds-badge_success';
+                            heimdallCart.removeItem(item.id);
+                        } else {
+                            var errorText = formatSalesforceError(result.error).split('\n\nTip: ')[0];
+                            badge.textContent = 'Failed';
+                            badge.className = 'slds-badge slds-badge_error';
+                            badge.title = errorText;
+                        }
+                    }
+                    self._doBatchItem(idx + 1);
+                })
+                .catch(function(err) {
+                    self._batchResults.push({ item: item, result: { success: false, error: String(err) }, idx: idx });
+                    if (batchItems[idx]) {
+                        var badge = batchItems[idx].querySelector('.slds-badge');
+                        badge.textContent = 'Error';
+                        badge.className = 'slds-badge slds-badge_error';
+                    }
+                    self._doBatchItem(idx + 1);
+                });
+            },
+            _showBatchResult: function() {
+                document.getElementById('restore-modal-progress').innerHTML = this._progressHtml(3);
+                document.getElementById('restore-modal-close').style.display = '';
+                var succeeded = this._batchResults.filter(function(r) { return r.result.success; }).length;
+                var failed = this._batchResults.length - succeeded;
+                if (failed === 0) {
+                    document.getElementById('restore-modal-title').textContent = 'All Restored';
+                    var body = '<div class="slds-text-align_center slds-p-around_medium">' + this._resultIcon(true) +
+                        '<p class="slds-text-heading_small slds-m-top_small slds-text-color_success"><strong>' + succeeded + ' record(s) restored successfully!</strong></p></div>';
+                    this._opts._onDone = this._opts.onSuccess || null;
+                    document.getElementById('restore-modal-body').innerHTML = body;
+                    document.getElementById('restore-modal-footer').innerHTML =
+                        '<button class="slds-button slds-button_brand" onclick="heimdallRestoreModal.close()">Done</button>';
+                } else {
+                    document.getElementById('restore-modal-title').textContent = 'Restore Complete';
+                    var body = '<div class="slds-text-align_center slds-p-around_small">' +
+                        '<p class="slds-text-heading_small">' + succeeded + ' succeeded, ' + failed + ' failed</p></div>';
+                    body += '<div class="slds-p-around_small">';
+                    var self = this;
+                    this._batchResults.forEach(function(br) {
+                        var statusHtml;
+                        if (br.result.success) {
+                            statusHtml = '<span class="slds-badge slds-badge_success">Restored: ' + self._esc(br.result.newId) + '</span>';
+                        } else {
+                            var formatted = formatSalesforceError(br.result.error);
+                            var errorText = formatted.split('\n\nTip: ')[0];
+                            statusHtml = '<span class="slds-badge slds-badge_error" title="' + self._esc(formatted) + '">Failed</span>' +
+                                '<div style="font-size:0.8rem;color:#ea001e;margin-top:0.25rem;">' + self._esc(errorText) + '</div>';
+                        }
+                        body += '<div class="rm-batch-item" style="flex-direction:column;align-items:flex-start;">' +
+                            '<span><strong>' + self._esc(br.item.objectName) + '</strong>: ' + self._esc(br.item.name || br.item.id) + '</span>' +
+                            statusHtml + '</div>';
+                    });
+                    body += '</div>';
+                    this._opts._onDone = this._opts.onSuccess || null;
+                    document.getElementById('restore-modal-body').innerHTML = body;
+                    document.getElementById('restore-modal-footer').innerHTML =
+                        '<button class="slds-button slds-button_brand" onclick="heimdallRestoreModal.close()">Done</button>';
+                }
+            }
+        };
     </script>
 </body>
 </html>

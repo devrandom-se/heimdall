@@ -70,10 +70,20 @@ public class WebController {
         for (Map.Entry<String, Object> entry : fields.entrySet()) {
             Field field = fieldMap.get(entry.getKey());
             if (field != null && "reference".equalsIgnoreCase(field.type)
-                    && field.referenceTo != null && field.referenceTo.size() == 1) {
+                    && field.referenceTo != null && !field.referenceTo.isEmpty()) {
                 String val = String.valueOf(entry.getValue());
                 if (!val.isEmpty()) {
-                    String refType = field.referenceTo.get(0);
+                    String refType;
+                    if (field.referenceTo.size() == 1) {
+                        refType = field.referenceTo.get(0);
+                    } else {
+                        // Polymorphic: resolve target type from ID prefix
+                        refType = sandboxRestoreClient.resolveObjectTypeByIdPrefix(val, field.referenceTo);
+                        if (refType == null) {
+                            // Can't resolve type — skip validation for this field
+                            continue;
+                        }
+                    }
                     refIdsByType.computeIfAbsent(refType, k -> new LinkedHashSet<>()).add(val);
                     fieldToRefType.put(entry.getKey(), refType);
                 }
@@ -519,6 +529,8 @@ public class WebController {
 
         // Collect lookup IDs per target object type for batch validation
         Map<String, Set<String>> lookupIdsByType = new LinkedHashMap<>();
+        // Track resolved polymorphic types per field name
+        Map<String, String> polymorphicResolvedType = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : backupFields.entrySet()) {
             Field field = fieldMap.get(entry.getKey());
             if (field != null && "reference".equalsIgnoreCase(field.type)
@@ -527,6 +539,14 @@ public class WebController {
                 if (refTo != null && refTo.size() == 1) {
                     lookupIdsByType.computeIfAbsent(refTo.get(0), k -> new LinkedHashSet<>())
                             .add(String.valueOf(entry.getValue()));
+                } else if (refTo != null && refTo.size() > 1) {
+                    // Polymorphic: resolve target type from ID prefix
+                    String val = String.valueOf(entry.getValue());
+                    String resolvedType = sandboxRestoreClient.resolveObjectTypeByIdPrefix(val, refTo);
+                    if (resolvedType != null) {
+                        polymorphicResolvedType.put(entry.getKey(), resolvedType);
+                        lookupIdsByType.computeIfAbsent(resolvedType, k -> new LinkedHashSet<>()).add(val);
+                    }
                 }
             }
         }
@@ -575,8 +595,24 @@ public class WebController {
                             warningCount++;
                         }
                     } else if (!valStr.isEmpty() && field.referenceTo != null && field.referenceTo.size() > 1) {
-                        // Polymorphic lookup - skip validation for v1
-                        fe.setLookupValid(true);
+                        // Polymorphic lookup — validate using resolved type
+                        String resolvedType = polymorphicResolvedType.get(fieldName);
+                        if (resolvedType != null) {
+                            fe.setLookupTargetName(resolvedType);
+                            Set<String> valid = validLookupIds.getOrDefault(resolvedType, Set.of());
+                            fe.setLookupValid(valid.contains(valStr));
+                            if (!fe.isLookupValid()) {
+                                fe.setValidationStatus("warning");
+                                fe.setValidationMessage("Referenced " + resolvedType + " does not exist in sandbox");
+                                warningCount++;
+                            }
+                        } else {
+                            // Could not resolve type from ID prefix
+                            fe.setLookupValid(true);
+                            fe.setValidationStatus("warning");
+                            fe.setValidationMessage("Polymorphic lookup — could not determine target object type from ID prefix");
+                            warningCount++;
+                        }
                     } else {
                         fe.setLookupValid(true);
                     }

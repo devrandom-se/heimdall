@@ -314,14 +314,24 @@
             var type = (f.type || 'string').toLowerCase();
 
             if (type === 'reference') {
+                var resolvedType = null;
+                var showSearch = false;
+                if (f.referenceTo && f.referenceTo.length === 1) {
+                    resolvedType = f.referenceTo[0];
+                    showSearch = true;
+                } else if (f.referenceTo && f.referenceTo.length > 1 && f.lookupTargetName) {
+                    resolvedType = f.lookupTargetName;
+                    showSearch = true;
+                }
                 var refLabel = '';
                 if (f.referenceTo && f.referenceTo.length > 1) {
-                    refLabel = ' <span class="slds-badge" style="font-size:0.65rem;">Polymorphic</span>';
+                    refLabel = ' <span class="slds-badge" style="font-size:0.65rem;">Polymorphic' +
+                        (resolvedType ? ' &rarr; ' + escapeHtml(resolvedType) : '') + '</span>';
                 }
                 return '<div class="lookup-wrapper">' +
                     '<input type="text" class="slds-input" id="input-' + f.name + '" name="' + f.name + '" value="' + escapeHtml(val) + '">' +
                     refLabel +
-                    (f.referenceTo && f.referenceTo.length === 1 ?
+                    (showSearch ?
                         '<button type="button" class="slds-button slds-button_icon" onclick="toggleLookupSearch(\'' + f.name + '\')" title="Search" style="position:absolute;right:0.5rem;top:0.25rem;">' +
                         '<svg class="slds-button__icon" aria-hidden="true" viewBox="0 0 52 52" style="width:1rem;height:1rem;">' +
                         '<path fill="currentColor" d="M49.6 45.3L38 33.8c2.4-3.4 3.8-7.5 3.8-12C41.8 10.3 32.5 1 21 1S.2 10.3.2 21.8s9.3 20.8 20.8 20.8c4.5 0 8.6-1.4 12-3.8l11.7 11.5c.6.6 1.4.6 2 0l2.9-2.9c.5-.7.5-1.5 0-2.1zM21 36.7c-8.2 0-14.9-6.7-14.9-14.9S12.8 6.9 21 6.9s14.9 6.7 14.9 14.9-6.7 14.9-14.9 14.9z"/>' +
@@ -432,7 +442,12 @@
         function attachLookupHandler(field) {
             var input = document.getElementById('input-' + field.name);
             if (!input) return;
-            var refType = field.referenceTo && field.referenceTo.length === 1 ? field.referenceTo[0] : null;
+            var refType = null;
+            if (field.referenceTo && field.referenceTo.length === 1) {
+                refType = field.referenceTo[0];
+            } else if (field.referenceTo && field.referenceTo.length > 1 && field.lookupTargetName) {
+                refType = field.lookupTargetName;
+            }
             if (!refType) return;
 
             var doSearch = debounce(function() {
@@ -512,8 +527,14 @@
                 errorDiv = div;
             }
 
+            var formatted = formatSalesforceError(message);
+            var parts = formatted.split('\n\nTip: ');
             var html = '<div class="slds-notify slds-notify_alert slds-alert_error slds-m-around_small" role="alert">' +
-                '<strong>Restore failed:</strong> ' + escapeHtml(message) + '</div>';
+                '<strong>Restore failed:</strong> ' + escapeHtml(parts[0]) + '</div>';
+            if (parts.length > 1) {
+                html += '<div class="slds-box slds-box_x-small slds-m-around_small" style="background:#e8f4fd;border-color:#0070d2;">' +
+                    '<p style="color:#0070d2;"><strong>Tip:</strong> ' + escapeHtml(parts[1]) + '</p></div>';
+            }
 
             if (skippedFields && skippedFields.length > 0) {
                 html += '<div class="slds-box slds-box_x-small slds-m-around_small" style="background:#e1f5fe;border-color:#0070d2;">' +
@@ -549,63 +570,36 @@
         function submitRestore() {
             var data = restoreState.formData;
             if (!data) return;
-            clearRestoreError();
 
             var fieldValues = collectFieldValues(data);
-
-            // Pre-submit check: warn about fields with validation issues
             var warnings = getWarningFields(data);
-            if (warnings.length > 0) {
-                var fieldNames = warnings.map(function(f) { return f.label + ' (' + f.name + ')'; }).join('\n  - ');
-                var msg = 'The following fields have validation warnings:\n  - ' + fieldNames +
-                    '\n\nYou can:\n' +
-                    '- Click OK to restore anyway (may fail)\n' +
-                    '- Click Cancel, then fix or clear those fields above';
-                if (!confirm(msg)) return;
-            } else {
-                if (!confirm('Restore ' + data.objectName + ': ' + (data.recordName || data.recordId) + '?')) return;
-            }
+            var warningLabels = warnings.map(function(f) { return f.label + ' (' + f.name + '): ' + f.validationMessage; });
 
-            var btn = document.getElementById('restore-btn');
-            btn.disabled = true;
-            btn.textContent = 'Restoring...';
-
-            fetch('/api/restore', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    recordId: data.recordId,
-                    period: data.period,
-                    fieldValues: fieldValues
-                })
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(result) {
-                if (result.success) {
-                    var html = '<div class="slds-align_absolute-center slds-p-around_large slds-text-color_success">' +
-                        '<strong>Restored successfully!</strong><br>Record ID: ' + escapeHtml(result.newId) + '</div>';
-                    if (result.skippedFields && result.skippedFields.length > 0) {
-                        html += '<div class="slds-box slds-box_x-small slds-m-around_medium" style="background:#fff8e1;border-color:#fe9339;">' +
-                            '<p class="slds-text-title_bold" style="color:#fe9339;">' + result.skippedFields.length +
-                            ' reference field(s) were auto-skipped (invalid references):</p><ul style="margin:0.5rem 0 0 1.5rem;">';
-                        result.skippedFields.forEach(function(s) {
-                            html += '<li>' + escapeHtml(s) + '</li>';
-                        });
-                        html += '</ul></div>';
-                    }
-                    document.getElementById('restore-fields').innerHTML = html;
-                    btn.style.display = 'none';
-                    clearRestoreError();
-                } else {
-                    showRestoreError(result.error, data, result.skippedFields);
-                    btn.disabled = false;
-                    btn.textContent = 'Restore';
+            heimdallRestoreModal.show({
+                objectName: data.objectName,
+                recordName: data.recordName || data.recordId,
+                recordId: data.recordId,
+                warnings: warningLabels.length > 0 ? warningLabels : null,
+                onRestore: function(done) {
+                    fetch('/api/restore', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            recordId: data.recordId,
+                            period: data.period,
+                            fieldValues: fieldValues
+                        })
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(result) { done(result); })
+                    .catch(function(err) { done({ success: false, error: String(err) }); });
+                },
+                onSuccess: function() {
+                    document.getElementById('restore-fields').innerHTML =
+                        '<div class="slds-align_absolute-center slds-p-around_large slds-text-color_success">' +
+                        '<strong>Record restored successfully.</strong></div>';
+                    document.getElementById('restore-btn').style.display = 'none';
                 }
-            })
-            .catch(function(err) {
-                showRestoreError(String(err), data);
-                btn.disabled = false;
-                btn.textContent = 'Restore';
             });
         }
 
@@ -801,57 +795,11 @@
         function restoreAll() {
             var items = heimdallCart.getItems();
             if (items.length === 0) return;
-            if (!confirm('Restore ' + items.length + ' record(s)?')) return;
 
-            var btn = document.getElementById('restore-all-btn');
-            btn.disabled = true;
-            btn.textContent = 'Restoring...';
-
-            restoreSequentially(items, 0);
-        }
-
-        function restoreSequentially(items, idx) {
-            if (idx >= items.length) {
-                document.getElementById('restore-all-btn').textContent = 'Done!';
-                return;
-            }
-
-            var item = items[idx];
-            var statusBadge = document.getElementById('cart-status-' + idx);
-            statusBadge.textContent = 'Restoring...';
-            statusBadge.className = 'slds-badge';
-
-            var fieldValues = collectCartFieldValues(idx);
-
-            fetch('/api/restore', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    recordId: item.id,
-                    period: item.period,
-                    fieldValues: fieldValues
-                })
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(result) {
-                if (result.success) {
-                    var msg = 'Restored: ' + result.newId;
-                    if (result.skippedFields && result.skippedFields.length > 0) {
-                        msg += ' (' + result.skippedFields.length + ' refs skipped)';
-                    }
-                    statusBadge.textContent = msg;
-                    statusBadge.className = 'slds-badge slds-badge_success';
-                    heimdallCart.removeItem(item.id);
-                } else {
-                    statusBadge.textContent = 'Failed: ' + result.error;
-                    statusBadge.className = 'slds-badge slds-badge_error';
-                }
-                restoreSequentially(items, idx + 1);
-            })
-            .catch(function(err) {
-                statusBadge.textContent = 'Error';
-                statusBadge.className = 'slds-badge slds-badge_error';
-                restoreSequentially(items, idx + 1);
+            heimdallRestoreModal.showBatch({
+                items: items,
+                getFieldValues: function(idx) { return collectCartFieldValues(idx); },
+                onSuccess: function() { renderCart(); }
             });
         }
     </script>

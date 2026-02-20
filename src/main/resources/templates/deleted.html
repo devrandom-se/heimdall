@@ -71,9 +71,15 @@
                         <td>
                             <button class="slds-button slds-button_neutral slds-button_small restore-btn"
                                     th:data-record-id="${record.id}"
-                                    th:data-period="${record.period}">
+                                    th:data-period="${record.period}"
+                                    th:data-object-name="${record.objectName}"
+                                    th:data-record-name="${record.name}">
                                 Restore
                             </button>
+                            <a th:href="@{/restore(id=${record.id}, period=${record.period})}"
+                               class="slds-button slds-button_neutral slds-button_small">
+                                Restore with Changes
+                            </a>
                             <button class="slds-button slds-button_neutral slds-button_small add-to-cart-btn"
                                     th:data-record-id="${record.id}"
                                     th:data-period="${record.period}"
@@ -111,24 +117,25 @@
                 btn.addEventListener('click', function() {
                     var recordId = this.dataset.recordId;
                     var period = this.dataset.period;
+                    var objectName = this.dataset.objectName;
+                    var recordName = this.dataset.recordName;
 
-                    if (confirm('Are you sure you want to restore record ' + recordId + '?')) {
-                        fetch('/api/restore', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ recordId: recordId, period: period })
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.success) {
-                                alert('Record restored successfully!');
-                                location.reload();
-                            } else {
-                                alert('Restore failed: ' + data.error);
-                            }
-                        })
-                        .catch(error => alert('Error: ' + error));
-                    }
+                    heimdallRestoreModal.show({
+                        objectName: objectName,
+                        recordName: recordName || recordId,
+                        recordId: recordId,
+                        onRestore: function(done) {
+                            fetch('/api/restore', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ recordId: recordId, period: period })
+                            })
+                            .then(function(r) { return r.json(); })
+                            .then(function(data) { done(data); })
+                            .catch(function(err) { done({ success: false, error: String(err) }); });
+                        },
+                        onSuccess: function() { location.reload(); }
+                    });
                 });
             });
 

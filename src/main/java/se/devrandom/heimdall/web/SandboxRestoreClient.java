@@ -83,6 +83,7 @@ public class SandboxRestoreClient {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final ConcurrentHashMap<String, DescribeSObjectResult> describeCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> keyPrefixCache = new ConcurrentHashMap<>();
 
     @PostConstruct
     private void init() {
@@ -203,6 +204,31 @@ public class SandboxRestoreClient {
                 throw new RuntimeException("Failed to parse describe result for " + name, e);
             }
         });
+    }
+
+    public String getKeyPrefix(String objectName) {
+        return keyPrefixCache.computeIfAbsent(objectName, name -> {
+            DescribeSObjectResult desc = describeSObject(name);
+            return desc.keyPrefix != null ? desc.keyPrefix : "";
+        });
+    }
+
+    public String resolveObjectTypeByIdPrefix(String id, List<String> candidateTypes) {
+        if (id == null || id.length() < 3 || candidateTypes == null || candidateTypes.isEmpty()) {
+            return null;
+        }
+        String prefix = id.substring(0, 3);
+        for (String type : candidateTypes) {
+            try {
+                String kp = getKeyPrefix(type);
+                if (prefix.equals(kp)) {
+                    return type;
+                }
+            } catch (Exception e) {
+                log.debug("Could not describe {} for key prefix resolution: {}", type, e.getMessage());
+            }
+        }
+        return null;
     }
 
     public Set<String> getCreateableFieldNames(String objectName) {
