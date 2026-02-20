@@ -33,6 +33,10 @@
             background-color: #706e6b;
             color: #fff;
         }
+        .slds-modal { pointer-events: none; }
+        .slds-backdrop { pointer-events: none; }
+        .slds-modal.slds-fade-in-open { pointer-events: auto; }
+        .slds-backdrop.slds-backdrop_open { pointer-events: auto; }
     </style>
 </head>
 <body>
@@ -95,6 +99,25 @@
                     </ul>
                 </div>
             </div>
+
+            <!-- Restore History -->
+            <div class="slds-card slds-m-top_small" th:if="${restoreHistory != null && !restoreHistory.isEmpty()}">
+                <div class="slds-card__header">
+                    <h2 class="slds-card__header-title">Restore History</h2>
+                </div>
+                <div class="slds-card__body">
+                    <ul class="slds-has-dividers_bottom-space">
+                        <li th:each="rh : ${restoreHistory}" class="slds-item">
+                            <div class="slds-box slds-box_x-small" style="border-left: 4px solid #0176d3;">
+                                <p class="slds-text-body_small slds-text-title_bold" th:text="${rh.sandboxName}">sandbox</p>
+                                <p th:if="${rh.createdNew}" class="slds-text-body_small">Created as <span th:text="${rh.newId}">id</span></p>
+                                <p th:unless="${rh.createdNew}" class="slds-text-body_small">Updated fields: <span th:text="${rh.restoredFields}">fields</span></p>
+                                <p class="slds-text-body_small" style="color: #706e6b;" th:text="${rh.formattedDate}">date</p>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </div>
 
         <!-- Right: Version Details & Diff -->
@@ -116,10 +139,21 @@
                            target="_blank">
                             Download File
                         </a>
-                        <button class="slds-button slds-button_brand restore-btn"
+                        <button class="slds-button slds-button_neutral add-to-cart-btn"
+                                th:data-record-id="${recordId}"
+                                th:data-period="${selectedVersion.period}"
+                                th:data-object-name="${objectName}"
+                                th:data-record-name="${recordName}">
+                            Add to Restore
+                        </button>
+                        <a th:href="@{/restore(id=${recordId}, period=${selectedVersion.period})}"
+                           class="slds-button slds-button_neutral">
+                            Restore with Changes
+                        </a>
+                        <button class="slds-button slds-button_brand compare-btn"
                                 th:data-record-id="${recordId}"
                                 th:data-period="${selectedVersion.period}">
-                            Restore This Version
+                            Compare with Salesforce
                         </button>
                     </div>
                 </div>
@@ -249,32 +283,220 @@
         </div>
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('.restore-btn').forEach(function(btn) {
-                btn.addEventListener('click', function() {
-                    var recordId = this.dataset.recordId;
-                    var period = this.dataset.period;
+    <!-- Compare/Restore Modal -->
+    <section id="compare-modal" role="dialog" tabindex="-1" class="slds-modal" aria-modal="true">
+        <div class="slds-modal__container" style="max-width: 80vw; width: 80vw;">
+            <header class="slds-modal__header">
+                <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" onclick="closeCompareModal()">
+                    <svg class="slds-button__icon slds-button__icon_large" aria-hidden="true" viewBox="0 0 52 52">
+                        <path fill="currentColor" d="M31 25.4l13-13c.6-.6.6-1.6 0-2.1l-2.1-2.1c-.6-.6-1.6-.6-2.1 0L26.4 21.6c-.4.4-1 .4-1.4 0L11.4 8.2c-.6-.6-1.5-.6-2.1 0L7.2 10.3c-.6.6-.6 1.5 0 2.1l13.5 13.4c.4.4.4 1 0 1.4L7.2 40.6c-.6.6-.6 1.5 0 2.1l2.1 2.1c.6.6 1.5.6 2.1 0l13.4-13.4c.4-.4 1-.4 1.4 0l13.5 13.4c.6.6 1.5.6 2.1 0l2.1-2.1c.6-.6.6-1.5 0-2.1L31 26.8c-.5-.4-.5-1-.1-1.4z"/>
+                    </svg>
+                </button>
+                <h2 class="slds-modal__title" id="compare-modal-title">Compare with Salesforce</h2>
+            </header>
+            <div class="slds-modal__content slds-p-around_medium" id="compare-modal-body">
+                <div class="slds-spinner_container">
+                    <div class="slds-spinner slds-spinner_medium" role="status">
+                        <span class="slds-assistive-text">Loading</span>
+                        <div class="slds-spinner__dot-a"></div>
+                        <div class="slds-spinner__dot-b"></div>
+                    </div>
+                </div>
+            </div>
+            <footer class="slds-modal__footer">
+                <button class="slds-button slds-button_neutral" id="compare-close-btn" onclick="closeCompareModal()">Cancel</button>
+                <button class="slds-button slds-button_brand" id="restore-selected-btn" style="display:none;" onclick="restoreSelected()">Restore Selected Fields</button>
+            </footer>
+        </div>
+    </section>
+    <div id="compare-backdrop" class="slds-backdrop"></div>
 
-                    if (confirm('Are you sure you want to restore this version of record ' + recordId + '?')) {
-                        fetch('/api/restore', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ recordId: recordId, period: period })
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.success) {
-                                alert('Record restored successfully! New ID: ' + data.newId);
-                            } else {
-                                alert('Restore failed: ' + data.error);
-                            }
-                        })
-                        .catch(error => alert('Error: ' + error));
-                    }
+    <script>
+        var compareState = {};
+
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.compare-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    compareState.recordId = this.dataset.recordId;
+                    compareState.period = this.dataset.period;
+                    openCompareModal();
+                });
+            });
+
+            document.querySelectorAll('.add-to-cart-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    heimdallCart.addItem({
+                        id: this.dataset.recordId,
+                        period: parseInt(this.dataset.period),
+                        objectName: this.dataset.objectName,
+                        name: this.dataset.recordName
+                    });
+                    this.textContent = 'Added!';
+                    this.disabled = true;
+                    var self = this;
+                    setTimeout(function() { self.textContent = 'Add to Restore'; self.disabled = false; }, 1500);
                 });
             });
         });
+
+        function openCompareModal() {
+            document.getElementById('compare-modal').classList.add('slds-fade-in-open');
+            document.getElementById('compare-backdrop').classList.add('slds-backdrop_open');
+            document.getElementById('compare-modal-body').innerHTML =
+                '<div class="slds-align_absolute-center slds-p-around_large">Loading comparison...</div>';
+            document.getElementById('restore-selected-btn').style.display = 'none';
+            document.getElementById('compare-close-btn').textContent = 'Cancel';
+
+            fetch('/api/compare', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recordId: compareState.recordId, period: compareState.period })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    document.getElementById('compare-modal-body').innerHTML =
+                        '<div class="slds-notify slds-notify_alert slds-alert_error" role="alert">' + data.error + '</div>';
+                    return;
+                }
+
+                compareState.objectName = data.objectName;
+                compareState.recordExists = data.recordExists;
+                compareState.inRecycleBin = data.inRecycleBin;
+
+                if (data.recordExists) {
+                    // Record exists — show diff with checkboxes for selective restore
+                    if (data.diff.length === 0) {
+                        document.getElementById('compare-modal-body').innerHTML =
+                            '<div class="slds-align_absolute-center slds-p-around_large slds-text-color_success">' +
+                            '<strong>No differences found</strong> &mdash; backup matches Salesforce</div>';
+                        return;
+                    }
+
+                    var html = '<span class="slds-badge slds-badge_success slds-m-bottom_small" style="display:inline-block;">Record exists in ' + data.sandboxName + '</span>' +
+                        '<div style="margin-top:0.5rem;margin-bottom:0.5rem;">' +
+                        '<button class="slds-button slds-button_neutral slds-button_small" onclick="toggleAllCheckboxes(true)">Select All</button> ' +
+                        '<button class="slds-button slds-button_neutral slds-button_small" onclick="toggleAllCheckboxes(false)">Deselect All</button>' +
+                        '</div>' +
+                        '<table class="slds-table slds-table_cell-buffer slds-table_bordered">' +
+                        '<thead><tr>' +
+                        '<th style="width:40px;"></th>' +
+                        '<th style="width:25%"><div class="slds-truncate">Field</div></th>' +
+                        '<th><div class="slds-truncate">Backup Value</div></th>' +
+                        '<th><div class="slds-truncate">Current Value</div></th>' +
+                        '</tr></thead><tbody>';
+
+                    data.diff.forEach(function(d) {
+                        var disabled = d.updateable ? '' : 'disabled';
+                        var rowClass = d.updateable ? '' : 'style="opacity:0.5;"';
+                        html += '<tr ' + rowClass + '>' +
+                            '<td><input type="checkbox" class="restore-field-cb" value="' + d.field + '" ' + disabled + '></td>' +
+                            '<td class="slds-text-title_bold">' + d.field + (!d.updateable ? ' <span class="slds-badge" style="font-size:0.65rem;">read-only</span>' : '') + '</td>' +
+                            '<td class="diff-added">' + escapeHtml(d.backupValue) + '</td>' +
+                            '<td class="diff-removed">' + escapeHtml(d.currentValue) + '</td>' +
+                            '</tr>';
+                    });
+
+                    html += '</tbody></table>';
+                    document.getElementById('compare-modal-body').innerHTML = html;
+                    document.getElementById('restore-selected-btn').textContent = 'Restore Selected Fields';
+                    document.getElementById('restore-selected-btn').style.display = '';
+                } else if (data.inRecycleBin) {
+                    // Record is in recycle bin — advise restoring from Salesforce
+                    var recycleBinUrl = data.lightningUrl + '/lightning/o/DeleteEvent/list';
+                    document.getElementById('compare-modal-body').innerHTML =
+                        '<div class="slds-illustration slds-illustration_small slds-p-around_large" style="text-align:center;">' +
+                        '<h3 class="slds-text-heading_medium slds-m-bottom_small">Record is in the Recycle Bin</h3>' +
+                        '<p>This record is soft-deleted and can be restored directly from Salesforce with its original ID and relationships intact.</p>' +
+                        '<p class="slds-m-top_medium"><a href="' + recycleBinUrl + '" target="_blank" class="slds-button slds-button_brand">Open Recycle Bin in Salesforce</a></p>' +
+                        '</div>';
+                } else {
+                    // Record permanently deleted — redirect to Restore with Changes for proper validation
+                    var restoreUrl = '/restore?id=' + encodeURIComponent(compareState.recordId) + '&period=' + compareState.period;
+                    document.getElementById('compare-modal-body').innerHTML =
+                        '<div class="slds-p-around_large" style="text-align:center;">' +
+                        '<span class="slds-badge slds-badge_error slds-m-bottom_small" style="display:inline-block;">Record permanently deleted</span>' +
+                        '<p class="slds-m-top_small">This record does not exist in the sandbox. Use <strong>Restore with Changes</strong> to review fields, fix invalid lookups, and create a new record.</p>' +
+                        '<p class="slds-m-top_medium"><a href="' + restoreUrl + '" class="slds-button slds-button_brand">Open Restore with Changes</a></p>' +
+                        '</div>';
+                }
+            })
+            .catch(error => {
+                document.getElementById('compare-modal-body').innerHTML =
+                    '<div class="slds-notify slds-notify_alert slds-alert_error">Error: ' + error + '</div>';
+            });
+        }
+
+        function closeCompareModal() {
+            document.getElementById('compare-modal').classList.remove('slds-fade-in-open');
+            document.getElementById('compare-backdrop').classList.remove('slds-backdrop_open');
+        }
+
+        function toggleAllCheckboxes(checked) {
+            document.querySelectorAll('.restore-field-cb:not(:disabled)').forEach(function(cb) {
+                cb.checked = checked;
+            });
+        }
+
+        function restoreSelected() {
+            if (compareState.recordExists) {
+                // Selective restore — collect checked fields
+                var fields = [];
+                document.querySelectorAll('.restore-field-cb:checked').forEach(function(cb) {
+                    fields.push(cb.value);
+                });
+                if (fields.length === 0) {
+                    alert('Select at least one field to restore.');
+                    return;
+                }
+                if (!confirm('Restore ' + fields.length + ' field(s) to existing record?')) return;
+
+                var body = { recordId: compareState.recordId, period: compareState.period, fields: fields };
+            } else {
+                // Create new — no field selection needed
+                if (!confirm('Create new record from backup data?')) return;
+                var body = { recordId: compareState.recordId, period: compareState.period };
+            }
+
+            document.getElementById('restore-selected-btn').disabled = true;
+            document.getElementById('restore-selected-btn').textContent = 'Restoring...';
+
+            fetch('/api/restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('compare-modal-body').innerHTML =
+                        '<div class="slds-align_absolute-center slds-p-around_large slds-text-color_success">' +
+                        '<strong>Restored successfully!</strong><br>Record ID: ' + data.newId + '</div>';
+                    document.getElementById('restore-selected-btn').style.display = 'none';
+                    document.getElementById('compare-close-btn').textContent = 'Close';
+                } else {
+                    document.getElementById('compare-modal-body').insertAdjacentHTML('afterbegin',
+                        '<div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">' +
+                        '<strong>Restore failed:</strong> ' + escapeHtml(data.error) + '</div>');
+                    document.getElementById('restore-selected-btn').disabled = false;
+                    document.getElementById('restore-selected-btn').textContent = 'Restore Selected Fields';
+                }
+            })
+            .catch(error => {
+                document.getElementById('compare-modal-body').insertAdjacentHTML('afterbegin',
+                    '<div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">' +
+                    '<strong>Error:</strong> ' + escapeHtml(String(error)) + '</div>');
+                document.getElementById('restore-selected-btn').disabled = false;
+                document.getElementById('restore-selected-btn').textContent = 'Restore Selected Fields';
+            });
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(str));
+            return div.innerHTML;
+        }
     </script>
 </div>
 </body>

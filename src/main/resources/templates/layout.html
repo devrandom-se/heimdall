@@ -65,6 +65,7 @@
                         <a href="/deleted" class="nav-link">Deleted Records</a>
                         <a href="/archived" class="nav-link">Archived Records</a>
                         <a href="/objects" class="nav-link">Objects</a>
+                        <a href="/restore" class="nav-link">Restore Cart <span id="cart-badge" class="slds-badge slds-badge_inverse" style="display:none;">0</span></a>
                         <span sec:authorize="isAuthenticated()" class="nav-link" th:text="'Logged in as: ' + ${#authentication?.name}"></span>
                     </nav>
                 </div>
@@ -83,5 +84,54 @@
     <footer class="slds-p-around_medium slds-text-align_center slds-text-color_weak">
         <p>Heimdall Backup Restore GUI</p>
     </footer>
+
+    <script>
+        var heimdallCart = {
+            KEY: 'heimdallRestoreCart',
+            getItems: function() {
+                try { return JSON.parse(localStorage.getItem(this.KEY) || '[]'); }
+                catch(e) { return []; }
+            },
+            addItem: function(item) {
+                var items = this.getItems();
+                // Avoid duplicates by ID
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].id === item.id) {
+                        items[i] = item; // Update existing
+                        localStorage.setItem(this.KEY, JSON.stringify(items));
+                        this.updateBadge();
+                        return;
+                    }
+                }
+                items.push(item);
+                localStorage.setItem(this.KEY, JSON.stringify(items));
+                this.updateBadge();
+            },
+            removeItem: function(id) {
+                var items = this.getItems().filter(function(i) { return i.id !== id; });
+                localStorage.setItem(this.KEY, JSON.stringify(items));
+                this.updateBadge();
+            },
+            clear: function() {
+                localStorage.removeItem(this.KEY);
+                this.updateBadge();
+            },
+            count: function() { return this.getItems().length; },
+            updateBadge: function() {
+                var badge = document.getElementById('cart-badge');
+                if (!badge) return;
+                var count = this.count();
+                if (count > 0) {
+                    badge.textContent = count;
+                    badge.style.display = '';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        };
+        document.addEventListener('DOMContentLoaded', function() {
+            heimdallCart.updateBadge();
+        });
+    </script>
 </body>
 </html>

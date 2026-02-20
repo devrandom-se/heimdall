@@ -46,7 +46,7 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
 - **Dynamic batch sizing** that adapts to API response times (50K-200K records)
 - **Record archiving** with configurable age threshold and SOQL expression filters
 - **Version history** across monthly backup periods
-- **Deleted records browser** (restore API not yet implemented — UI buttons are stubs)
+- **Restore to sandbox** — compare backup with live Salesforce data, select fields to restore (PATCH), or recreate deleted records (POST)
 - **Field-by-field diff** between any two record versions
 - **Related records and files** shown on the unified record page
 - **API limit protection** — stops gracefully before exceeding configurable daily API usage threshold
@@ -241,6 +241,20 @@ SALESFORCE_JWT_KEY_FILE=/path/to/private.key
 | `HEIMDALL_METADATA_AUTO_MIGRATE` | `true` | Auto-create SF metadata objects |
 | `RDS_INSTANCE_IDENTIFIER` | _(empty)_ | RDS instance for auto-start/stop |
 | `HEIMDALL_API_LIMIT_STOP_AT_PERCENT` | _(empty)_ | Stop backup at N% of daily API limit |
+
+### Restore to Sandbox
+
+To enable restore, configure a target sandbox. Heimdall authenticates separately to the sandbox using its own Connected App credentials.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HEIMDALL_RESTORE_SANDBOX_NAME` | _(empty)_ | Sandbox name (empty = restore disabled) |
+| `HEIMDALL_RESTORE_SANDBOX_LOGIN_URL` | `https://test.salesforce.com` | Sandbox login URL (use instance URL for client_credentials) |
+| `HEIMDALL_RESTORE_SANDBOX_USERNAME` | _(empty)_ | Sandbox username (required for JWT) |
+| `HEIMDALL_RESTORE_SANDBOX_CLIENT_ID` | _(empty)_ | Sandbox Connected App Consumer Key |
+| `HEIMDALL_RESTORE_SANDBOX_CLIENT_SECRET` | _(empty)_ | Sandbox Connected App Consumer Secret |
+| `HEIMDALL_RESTORE_SANDBOX_GRANT_TYPE` | _(from prod)_ | Auth method (defaults to same as production) |
+| `HEIMDALL_RESTORE_SANDBOX_JWT_KEY_FILE` | _(from prod)_ | JWT key file (defaults to same as production) |
 
 ## Docker
 

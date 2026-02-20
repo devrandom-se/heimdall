@@ -17,7 +17,23 @@
  */
 package se.devrandom.heimdall.salesforce.objects;
 
+import java.util.List;
+
 public class Field {
     public String name;
     public String type;
+    public Boolean createable;
+    public Boolean updateable;
+    public String label;
+    public Boolean nillable;
+    public Object defaultValue;
+    public List<String> referenceTo;
+    public List<PicklistValue> picklistValues;
+    public Integer length;
+
+    public static class PicklistValue {
+        public Boolean active;
+        public String value;
+        public String label;
+    }
 }

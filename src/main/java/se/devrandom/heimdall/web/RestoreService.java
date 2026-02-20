@@ -75,6 +75,27 @@ public class RestoreService {
         config.setConnectionTimeout(10000);
         dataSource = new HikariDataSource(config);
         log.info("Connection pool initialized (max=5)");
+
+        // Create restore_log table if it doesn't exist
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS restore_log (
+                    id SERIAL PRIMARY KEY,
+                    original_id VARCHAR(18) NOT NULL,
+                    new_id VARCHAR(18) NOT NULL,
+                    object_name VARCHAR(255) NOT NULL,
+                    period INTEGER NOT NULL,
+                    sandbox_name VARCHAR(255) NOT NULL,
+                    restored_at TIMESTAMP DEFAULT NOW()
+                )
+                """);
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_restore_log_original_id ON restore_log(original_id)");
+            stmt.execute("ALTER TABLE restore_log ADD COLUMN IF NOT EXISTS restored_fields TEXT");
+            log.info("restore_log table ready");
+        } catch (SQLException e) {
+            log.error("Failed to create restore_log table: {}", e.getMessage());
+        }
     }
 
     @PreDestroy
@@ -682,6 +703,53 @@ public class RestoreService {
         return null;
     }
 
+    /**
+     * Log a restore operation
+     */
+    public void logRestore(String originalId, String newId, String objectName, int period, String sandboxName, List<String> restoredFields) {
+        String sql = "INSERT INTO restore_log (original_id, new_id, object_name, period, sandbox_name, restored_fields) VALUES (?, ?, ?, ?, ?, ?)";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, originalId);
+            stmt.setString(2, newId);
+            stmt.setString(3, objectName);
+            stmt.setInt(4, period);
+            stmt.setString(5, sandboxName);
+            stmt.setString(6, restoredFields != null ? String.join(", ", restoredFields) : null);
+            stmt.executeUpdate();
+            log.info("Logged restore: {} -> {} ({}) in sandbox '{}'", originalId, newId, objectName, sandboxName);
+        } catch (SQLException e) {
+            log.error("Failed to log restore: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Get restore history for a record
+     */
+    public List<RestoreLogEntry> getRestoreHistory(String recordId) {
+        List<RestoreLogEntry> entries = new ArrayList<>();
+        String sql = "SELECT new_id, object_name, period, sandbox_name, restored_at, restored_fields FROM restore_log WHERE original_id = ? ORDER BY restored_at DESC";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, recordId);
+            try (ResultSet rs = executeQuery(stmt, "getRestoreHistory")) {
+                while (rs.next()) {
+                    RestoreLogEntry e = new RestoreLogEntry();
+                    e.setNewId(rs.getString("new_id"));
+                    e.setObjectName(rs.getString("object_name"));
+                    e.setPeriod(rs.getInt("period"));
+                    e.setSandboxName(rs.getString("sandbox_name"));
+                    e.setRestoredAt(rs.getTimestamp("restored_at"));
+                    e.setRestoredFields(rs.getString("restored_fields"));
+                    entries.add(e);
+                }
+            }
+        } catch (SQLException e) {
+            log.error("Failed to get restore history: {}", e.getMessage());
+        }
+        return entries;
+    }
+
     // DTO classes
     public static class RecordStatus {
         private final boolean active;
@@ -840,5 +908,32 @@ public class RestoreService {
         public void setNewValue(String newValue) { this.newValue = newValue; }
         public String getType() { return type; }
         public void setType(String type) { this.type = type; }
+    }
+
+    public static class RestoreLogEntry {
+        private String newId;
+        private String objectName;
+        private int period;
+        private String sandboxName;
+        private Timestamp restoredAt;
+        private String restoredFields;
+
+        public String getNewId() { return newId; }
+        public void setNewId(String newId) { this.newId = newId; }
+        public String getObjectName() { return objectName; }
+        public void setObjectName(String objectName) { this.objectName = objectName; }
+        public int getPeriod() { return period; }
+        public void setPeriod(int period) { this.period = period; }
+        public String getSandboxName() { return sandboxName; }
+        public void setSandboxName(String sandboxName) { this.sandboxName = sandboxName; }
+        public Timestamp getRestoredAt() { return restoredAt; }
+        public void setRestoredAt(Timestamp restoredAt) { this.restoredAt = restoredAt; }
+        public String getRestoredFields() { return restoredFields; }
+        public void setRestoredFields(String restoredFields) { this.restoredFields = restoredFields; }
+        public boolean isCreatedNew() { return restoredFields == null; }
+        public String getFormattedDate() {
+            if (restoredAt == null) return "";
+            return restoredAt.toLocalDateTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        }
     }
 }

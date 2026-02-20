@@ -74,6 +74,13 @@
                                     th:data-period="${record.period}">
                                 Restore
                             </button>
+                            <button class="slds-button slds-button_neutral slds-button_small add-to-cart-btn"
+                                    th:data-record-id="${record.id}"
+                                    th:data-period="${record.period}"
+                                    th:data-object-name="${record.objectName}"
+                                    th:data-record-name="${record.name}">
+                                Add to Restore
+                            </button>
                         </td>
                     </tr>
                     <tr th:if="${records.isEmpty()}">
@@ -122,6 +129,21 @@
                         })
                         .catch(error => alert('Error: ' + error));
                     }
+                });
+            });
+
+            document.querySelectorAll('.add-to-cart-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    heimdallCart.addItem({
+                        id: this.dataset.recordId,
+                        period: parseInt(this.dataset.period),
+                        objectName: this.dataset.objectName,
+                        name: this.dataset.recordName
+                    });
+                    this.textContent = 'Added!';
+                    this.disabled = true;
+                    var self = this;
+                    setTimeout(function() { self.textContent = 'Add to Restore'; self.disabled = false; }, 1500);
                 });
             });
         });

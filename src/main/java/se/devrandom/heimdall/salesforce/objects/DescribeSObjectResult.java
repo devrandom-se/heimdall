@@ -19,7 +19,9 @@ package se.devrandom.heimdall.salesforce.objects;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class DescribeSObjectResult {
@@ -33,6 +35,12 @@ public class DescribeSObjectResult {
     public List<ChildRelationship> childRelationships;
     public List<Field> fields;
     public String keyPrefix;
+
+    public Map<String, Field> getFieldMap() {
+        Map<String, Field> map = new LinkedHashMap<>();
+        if (fields != null) for (Field f : fields) map.put(f.name, f);
+        return map;
+    }
 
     public Boolean hasSystemModstampField() {
         for(Field f : fields) {
@@ -56,6 +64,28 @@ public class DescribeSObjectResult {
      * Get names of all reference (lookup) fields on this object.
      * Used to store relationship IDs in metadata regardless of field naming convention.
      */
+    public Set<String> getCreateableFieldNames() {
+        Set<String> names = new HashSet<>();
+        if (fields == null) return names;
+        for (Field f : fields) {
+            if (Boolean.TRUE.equals(f.createable)) {
+                names.add(f.name);
+            }
+        }
+        return names;
+    }
+
+    public Set<String> getUpdateableFieldNames() {
+        Set<String> names = new HashSet<>();
+        if (fields == null) return names;
+        for (Field f : fields) {
+            if (Boolean.TRUE.equals(f.updateable)) {
+                names.add(f.name);
+            }
+        }
+        return names;
+    }
+
     public Set<String> getReferenceFieldNames() {
         Set<String> refFields = new HashSet<>();
         if (fields == null) return refFields;

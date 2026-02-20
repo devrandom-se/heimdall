@@ -56,6 +56,7 @@
                         <th scope="col"><div class="slds-truncate">Name</div></th>
                         <th scope="col"><div class="slds-truncate">Record ID</div></th>
                         <th scope="col"><div class="slds-truncate">Archive Period</div></th>
+                        <th scope="col"><div class="slds-truncate">Actions</div></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -67,9 +68,18 @@
                             </div>
                         </td>
                         <td><div class="slds-truncate" th:text="${T(se.devrandom.heimdall.web.RestoreService).formatPeriod(record.period)}">Period</div></td>
+                        <td>
+                            <button class="slds-button slds-button_neutral slds-button_small add-to-cart-btn"
+                                    th:data-record-id="${record.id}"
+                                    th:data-period="${record.period}"
+                                    th:data-object-name="${record.objectName}"
+                                    th:data-record-name="${record.name}">
+                                Add to Restore
+                            </button>
+                        </td>
                     </tr>
                     <tr th:if="${records.isEmpty()}">
-                        <td colspan="3" class="slds-text-align_center slds-p-around_medium">
+                        <td colspan="4" class="slds-text-align_center slds-p-around_medium">
                             No archived records found for this object.
                         </td>
                     </tr>
@@ -89,6 +99,25 @@
             </nav>
         </div>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.add-to-cart-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    heimdallCart.addItem({
+                        id: this.dataset.recordId,
+                        period: parseInt(this.dataset.period),
+                        objectName: this.dataset.objectName,
+                        name: this.dataset.recordName
+                    });
+                    this.textContent = 'Added!';
+                    this.disabled = true;
+                    var self = this;
+                    setTimeout(function() { self.textContent = 'Add to Restore'; self.disabled = false; }, 1500);
+                });
+            });
+        });
+    </script>
 </div>
 </body>
 </html>

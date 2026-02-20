@@ -526,6 +526,14 @@ Resources:
               Value: heimdall
             - Name: RDS_INSTANCE_IDENTIFIER
               Value: !Sub ${AWS::StackName}-db
+            - Name: HEIMDALL_RESTORE_SANDBOX_NAME
+              Value: ""
+            - Name: HEIMDALL_RESTORE_SANDBOX_USERNAME
+              Value: ""
+            - Name: HEIMDALL_RESTORE_SANDBOX_CLIENT_ID
+              Value: ""
+            - Name: HEIMDALL_RESTORE_SANDBOX_CLIENT_SECRET
+              Value: ""
           Secrets:
             - Name: POSTGRES_PASSWORD
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/rds/password
