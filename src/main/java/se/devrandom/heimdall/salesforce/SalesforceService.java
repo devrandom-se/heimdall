@@ -1189,14 +1189,11 @@ public class SalesforceService {
 
             } catch (IOException | SQLException e) {
                 log.error("Failed to process consolidated CSV for {}: {}", objectName, e.getMessage(), e);
+            } finally {
+                deleteTempFile(baseFilePath);
             }
         } else if (totalRecords == 0 && Files.exists(baseFilePath)) {
-            try {
-                Files.delete(baseFilePath);
-                log.info("Deleted empty CSV file for {} (0 records)", objectName);
-            } catch (IOException e) {
-                log.warn("Failed to delete empty CSV file {}: {}", baseFilePath, e.getMessage());
-            }
+            deleteTempFile(baseFilePath);
         }
 
         // Clean up temporary files
@@ -1425,14 +1422,11 @@ public class SalesforceService {
 
             } catch (IOException | SQLException e) {
                 log.error("Failed to process consolidated CSV for {}: {}", objectName, e.getMessage(), e);
+            } finally {
+                deleteTempFile(csvPath);
             }
         } else if (recordCount == 0 && Files.exists(csvPath)) {
-            try {
-                Files.delete(csvPath);
-                log.info("Deleted empty CSV file for {} (0 records)", objectName);
-            } catch (IOException e) {
-                log.warn("Failed to delete empty CSV file {}: {}", csvPath, e.getMessage());
-            }
+            deleteTempFile(csvPath);
         }
     }
 
@@ -1456,14 +1450,11 @@ public class SalesforceService {
                 log.info("Inserted {} archive records into PostgreSQL for {}", insertedRecords, objectName);
             } catch (IOException | SQLException e) {
                 log.error("Failed to process archive CSV for {}: {}", objectName, e.getMessage(), e);
+            } finally {
+                deleteTempFile(csvPath);
             }
         } else if (recordCount == 0 && Files.exists(csvPath)) {
-            try {
-                Files.delete(csvPath);
-                log.info("Deleted empty archive CSV file for {} (0 records)", objectName);
-            } catch (IOException e) {
-                log.warn("Failed to delete empty archive CSV file {}: {}", csvPath, e.getMessage());
-            }
+            deleteTempFile(csvPath);
         }
     }
 
@@ -1491,6 +1482,18 @@ public class SalesforceService {
             }
 
             log.debug("Concatenated {} lines from {} to {}", lineCount, source, destination);
+        }
+    }
+
+    private void deleteTempFile(Path path) {
+        try {
+            if (path != null && Files.exists(path)) {
+                long sizeMb = Files.size(path) / (1024 * 1024);
+                Files.delete(path);
+                log.info("Deleted temp file {} ({} MB)", path, sizeMb);
+            }
+        } catch (IOException e) {
+            log.warn("Failed to delete temp file {}: {}", path, e.getMessage());
         }
     }
 

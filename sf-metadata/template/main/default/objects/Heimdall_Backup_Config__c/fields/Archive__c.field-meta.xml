@@ -2,8 +2,9 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Archive__c</fullName>
     <defaultValue>false</defaultValue>
-    <description>If checked, Heimdall will archive old records for this object based on Archive Age Days.</description>
+    <description>DEPRECATED — Use Status 'Backup + Archive' or 'Archive Only' instead. Kept for backward compatibility.</description>
     <externalId>false</externalId>
+    <inlineHelpText>DEPRECATED — Use Status 'Backup + Archive' or 'Archive Only' instead.</inlineHelpText>
     <label>Archive</label>
     <trackTrending>false</trackTrending>
     <type>Checkbox</type>

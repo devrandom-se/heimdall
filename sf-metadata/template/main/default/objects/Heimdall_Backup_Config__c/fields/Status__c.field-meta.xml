@@ -25,6 +25,16 @@
                 <default>false</default>
                 <label>No Backup</label>
             </value>
+            <value>
+                <fullName>Backup + Archive</fullName>
+                <default>false</default>
+                <label>Backup + Archive</label>
+            </value>
+            <value>
+                <fullName>Archive Only</fullName>
+                <default>false</default>
+                <label>Archive Only</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

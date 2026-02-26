@@ -244,13 +244,67 @@ public class ObjectBackupProcessor
             return null;
         }
 
-        // Skip if not marked for backup
-        if (!backup.getStatus__c().equals(Heimdall_Backup_Config__c.BACKUP)) {
+        boolean doBackup = backup.shouldBackup();
+        boolean doArchive = backup.shouldArchive();
+
+        // Skip if nothing to do (Not Replicable, No Backup)
+        if (!doBackup && !doArchive) {
             log.debug("Skipping {} (Status: {})", backup.getObjectName__c(), backup.getStatus__c());
             return null;
         }
 
+        // Backward compat deprecation warning
+        if (Heimdall_Backup_Config__c.BACKUP.equals(backup.getStatus__c()) && Boolean.TRUE.equals(backup.getArchive__c())) {
+            log.warn("{} uses deprecated Archive__c checkbox. Update Status to 'Backup + Archive' instead.",
+                    backup.getObjectName__c());
+        }
+
         String objectName = backup.getObjectName__c();
+
+        // Wrap entire processing logic in try-catch so one object failing doesn't kill the whole job
+        try {
+            return processObject(backup, objectName, doBackup, doArchive);
+        } catch (Exception e) {
+            log.error("Processing FAILED for {} - skipping and continuing with next object: {}", objectName, e.getMessage());
+            return null;
+        }
+    }
+
+    private DescribeSObjectResult processObject(Heimdall_Backup_Config__c backup, String objectName,
+            boolean doBackup, boolean doArchive) {
+
+        // Describe the object to get field metadata (cached, no extra API cost)
+        DescribeSObjectResult describe = salesforceService.describeSObject(objectName);
+
+        // PHASES 1+2: Backup active and deleted records
+        if (doBackup) {
+            executeBackup(backup, describe, objectName);
+        } else {
+            log.info("Skipping backup for {} (Status: {})", objectName, backup.getStatus__c());
+        }
+
+        // PHASE 3: Archive old records if configured
+        if (doArchive && backup.getArchive_Age_Days__c() != null && !"ContentVersion".equals(objectName)) {
+            statisticsService.incrementObjectsWithArchiveEnabled();
+            try {
+                executeArchive(backup, describe, objectName);
+            } catch (Exception e) {
+                log.error("Archive FAILED for {}: {}", objectName, e.getMessage(), e);
+            }
+        }
+
+        // Update statistics so admins can see when the object was last processed
+        salesforceService.updateBackupStatistics(backup, 0);
+
+        // Refresh pre-computed object stats for fast dashboard loading
+        postgresService.refreshObjectStats(objectName);
+
+        return describe;
+    }
+
+    private void executeBackup(Heimdall_Backup_Config__c backup, DescribeSObjectResult describe, String objectName) {
+
+        Optional<ApiLimitTracker> tracker = salesforceService.getApiLimitTracker();
 
         // Get checkpoint from PostgreSQL
         String lastModstamp = "1970-01-01T00:00:00.000Z";
@@ -287,29 +341,12 @@ public class ObjectBackupProcessor
                 if (newRecordCount == 0) {
                     log.info("COUNT check: {} has no new records, skipping backup", objectName);
                     salesforceService.updateBackupStatistics(backup, 0);
-                    return null;
+                    return;
                 } else if (newRecordCount > 0) {
                     log.info("COUNT check: {} has {} new records, proceeding with backup", objectName, newRecordCount);
                 }
             }
         }
-
-        // Wrap entire backup logic in try-catch so one object failing doesn't kill the whole job
-        try {
-            return executeBackup(backup, objectName, lastModstamp, lastId, lastModstampDeleted, lastIdDeleted);
-        } catch (Exception e) {
-            log.error("Backup FAILED for {} - skipping and continuing with next object: {}", objectName, e.getMessage());
-            return null;
-        }
-    }
-
-    private DescribeSObjectResult executeBackup(Heimdall_Backup_Config__c backup, String objectName,
-            String lastModstamp, String lastId, String lastModstampDeleted, String lastIdDeleted) {
-
-        Optional<ApiLimitTracker> tracker = salesforceService.getApiLimitTracker();
-
-        // Describe the object to get field metadata
-        DescribeSObjectResult describe = salesforceService.describeSObject(objectName);
 
         // Create backup run in PostgreSQL (skip for ContentVersion - it manages its own run in downloadContentVersionFiles)
         long runId = -1;
@@ -487,9 +524,6 @@ public class ObjectBackupProcessor
         // Update statistics
         salesforceService.updateBackupStatistics(backup, grandTotal);
 
-        // Refresh pre-computed object stats for fast dashboard loading
-        postgresService.refreshObjectStats(objectName);
-
         log.info("Completed backup for {} - Total: {} records ({} active, {} deleted) in {} batches",
                 objectName, grandTotal, totalRecords, totalDeletedRecords, batchCounter);
 
@@ -500,19 +534,6 @@ public class ObjectBackupProcessor
         int cpus = rt.availableProcessors();
         log.info("Resource usage: heap {} MB / {} MB ({}%), CPUs: {}",
                 usedMb, maxMb, maxMb > 0 ? usedMb * 100 / maxMb : 0, cpus);
-
-        // PHASE 3: Archive old records if configured
-        if (Boolean.TRUE.equals(backup.getArchive__c()) && backup.getArchive_Age_Days__c() != null
-                && !"ContentVersion".equals(objectName)) {
-            statisticsService.incrementObjectsWithArchiveEnabled();
-            try {
-                executeArchive(backup, describe, objectName);
-            } catch (Exception e) {
-                log.error("Archive FAILED for {} - backup completed OK: {}", objectName, e.getMessage(), e);
-            }
-        }
-
-        return describe;
     }
 
     /**

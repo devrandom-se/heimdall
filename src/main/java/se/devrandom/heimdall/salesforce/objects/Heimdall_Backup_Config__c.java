@@ -23,6 +23,8 @@ public class Heimdall_Backup_Config__c extends SObject {
     public static final String BACKUP = "Backup";
     public static final String NO_BACKUP = "No Backup";
     public static final String NOT_REPLICABLE = "Not Replicable";
+    public static final String BACKUP_AND_ARCHIVE = "Backup + Archive";
+    public static final String ARCHIVE_ONLY = "Archive Only";
 
     @SalesforceField(externalId = true)
     public String ObjectName__c;
@@ -146,6 +148,17 @@ public class Heimdall_Backup_Config__c extends SObject {
         super(objectName);
         ObjectName__c = objectName;
         this.Status__c = status;
+    }
+
+    public boolean shouldBackup() {
+        return BACKUP.equals(Status__c) || BACKUP_AND_ARCHIVE.equals(Status__c);
+    }
+
+    public boolean shouldArchive() {
+        if (BACKUP_AND_ARCHIVE.equals(Status__c) || ARCHIVE_ONLY.equals(Status__c)) return true;
+        // Backward compat: old Backup + Archive__c=true
+        if (BACKUP.equals(Status__c) && Boolean.TRUE.equals(Archive__c)) return true;
+        return false;
     }
 
     public boolean equalsOnImportantFields(Object obj) {
