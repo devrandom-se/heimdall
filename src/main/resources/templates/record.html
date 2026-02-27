@@ -168,7 +168,7 @@
                         <tbody>
                             <tr th:each="entry : ${selectedVersion.metadata}">
                                 <td class="slds-text-title_bold" th:text="${entry.key}">Field</td>
-                                <td th:text="${entry.value}">Value</td>
+                                <td style="white-space: pre-wrap; word-break: break-word;" th:text="${entry.value}">Value</td>
                             </tr>
                         </tbody>
                     </table>
@@ -192,8 +192,8 @@
                         <tbody>
                             <tr th:each="change : ${diff}" th:classappend="${change.type}">
                                 <td class="slds-text-title_bold" th:text="${change.field}">Field</td>
-                                <td th:text="${change.oldValue}">Old</td>
-                                <td th:text="${change.newValue}">New</td>
+                                <td style="white-space: pre-wrap; word-break: break-word;" th:text="${change.oldValue}">Old</td>
+                                <td style="white-space: pre-wrap; word-break: break-word;" th:text="${change.newValue}">New</td>
                             </tr>
                         </tbody>
                     </table>
@@ -321,6 +321,31 @@
                     compareState.period = this.dataset.period;
                     openCompareModal();
                 });
+            });
+
+            // Render HtmlBody fields as sandboxed iframes
+            document.querySelectorAll('table.slds-table tbody tr').forEach(function(row) {
+                var fieldCell = row.querySelector('td:first-child');
+                var valueCell = row.querySelector('td:nth-child(2)');
+                if (fieldCell && valueCell && fieldCell.textContent.trim() === 'HtmlBody') {
+                    var htmlContent = valueCell.textContent;
+                    var iframe = document.createElement('iframe');
+                    iframe.sandbox = '';
+                    iframe.style.width = '100%';
+                    iframe.style.border = 'none';
+                    iframe.style.overflow = 'hidden';
+                    iframe.srcdoc = htmlContent;
+                    iframe.onload = function() {
+                        try {
+                            iframe.style.height = iframe.contentDocument.documentElement.scrollHeight + 'px';
+                        } catch(e) {
+                            iframe.style.height = '300px';
+                        }
+                    };
+                    valueCell.textContent = '';
+                    valueCell.style.whiteSpace = 'normal';
+                    valueCell.appendChild(iframe);
+                }
             });
 
             document.querySelectorAll('.add-to-cart-btn').forEach(function(btn) {
