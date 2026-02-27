@@ -132,7 +132,7 @@ public class WebController {
         int totalObjects = stats.size();
         int totalRecords = stats.values().stream().mapToInt(RestoreService.ObjectStats::getUniqueRecords).sum();
         int deletedRecords = stats.values().stream().mapToInt(RestoreService.ObjectStats::getDeletedCount).sum();
-        int archivedRecords = restoreService.countAllArchivedRecords();
+        int archivedRecords = stats.values().stream().mapToInt(RestoreService.ObjectStats::getArchivedCount).sum();
 
         model.addAttribute("stats", Map.of(
             "totalObjects", totalObjects,

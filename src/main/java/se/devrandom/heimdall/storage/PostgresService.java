@@ -539,9 +539,11 @@ public class PostgresService {
                     unique_records INTEGER DEFAULT 0,
                     total_versions INTEGER DEFAULT 0,
                     deleted_count INTEGER DEFAULT 0,
+                    archived_count INTEGER DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT NOW(),
                     CONSTRAINT object_stats_pk PRIMARY KEY (org_id, object_name)
                 );
+                ALTER TABLE object_stats ADD COLUMN IF NOT EXISTS archived_count INTEGER DEFAULT 0;
                 """;
 
             stmt.execute(createTablesSql);
@@ -748,13 +750,17 @@ public class PostgresService {
      */
     public void refreshObjectStats(String objectName) {
         String sql = """
-            INSERT INTO object_stats (org_id, object_name, unique_records, total_versions, deleted_count, updated_at)
-            SELECT ?, ?, COUNT(DISTINCT id), COUNT(*), SUM(CASE WHEN is_deleted THEN 1 ELSE 0 END), NOW()
+            INSERT INTO object_stats (org_id, object_name, unique_records, total_versions, deleted_count, archived_count, updated_at)
+            SELECT ?, ?, COUNT(DISTINCT id), COUNT(*),
+                SUM(CASE WHEN is_deleted THEN 1 ELSE 0 END),
+                COUNT(DISTINCT CASE WHEN period < 0 THEN id END),
+                NOW()
             FROM objects WHERE org_id = ? AND object_name = ?
             ON CONFLICT (org_id, object_name) DO UPDATE SET
                 unique_records = EXCLUDED.unique_records,
                 total_versions = EXCLUDED.total_versions,
                 deleted_count = EXCLUDED.deleted_count,
+                archived_count = EXCLUDED.archived_count,
                 updated_at = EXCLUDED.updated_at
             """;
 

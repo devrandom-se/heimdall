@@ -68,6 +68,11 @@ CREATE INDEX IF NOT EXISTS objects_cdl_linked_entity_id
     ON objects ((metadata->>'LinkedEntityId'))
     WHERE object_name = 'ContentDocumentLink';
 
+-- Partial index for fast archived records lookup and pagination
+CREATE INDEX IF NOT EXISTS objects_archived_lookup
+    ON objects (org_id, object_name, id, period DESC)
+    WHERE period < 0;
+
 -- pg_trgm for fast LIKE '%recordId%' search across metadata (excluding content objects handled separately)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS objects_metadata_trgm_no_content_idx

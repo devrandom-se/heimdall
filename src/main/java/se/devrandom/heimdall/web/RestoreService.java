@@ -288,14 +288,14 @@ public class RestoreService {
     }
 
     /**
-     * Get list of objects that have archived records (period < 0)
+     * Get list of objects that have archived records (uses pre-computed stats)
      */
     public List<String> getObjectsWithArchivedRecords() {
         List<String> objects = new ArrayList<>();
         String sql = """
-            SELECT DISTINCT object_name
-            FROM objects
-            WHERE org_id = ? AND period < 0
+            SELECT object_name
+            FROM object_stats
+            WHERE org_id = ? AND archived_count > 0
             ORDER BY object_name
             """;
 
@@ -353,13 +353,13 @@ public class RestoreService {
     }
 
     /**
-     * Count archived records for an object type
+     * Count archived records for an object type (uses pre-computed stats)
      */
     public int countArchivedRecords(String objectName) {
         String sql = """
-            SELECT COUNT(DISTINCT id)
-            FROM objects
-            WHERE org_id = ? AND object_name = ? AND period < 0
+            SELECT archived_count
+            FROM object_stats
+            WHERE org_id = ? AND object_name = ?
             """;
 
         try (Connection conn = getConnection();
@@ -411,7 +411,7 @@ public class RestoreService {
     public Map<String, ObjectStats> getObjectStatistics() {
         Map<String, ObjectStats> stats = new LinkedHashMap<>();
         String sql = """
-            SELECT object_name, unique_records, total_versions, deleted_count
+            SELECT object_name, unique_records, total_versions, deleted_count, archived_count
             FROM object_stats
             WHERE org_id = ?
             ORDER BY unique_records DESC
@@ -428,6 +428,7 @@ public class RestoreService {
                     s.setUniqueRecords(rs.getInt("unique_records"));
                     s.setTotalVersions(rs.getInt("total_versions"));
                     s.setDeletedCount(rs.getInt("deleted_count"));
+                    s.setArchivedCount(rs.getInt("archived_count"));
                     stats.put(s.getObjectName(), s);
                 }
             }
@@ -883,6 +884,7 @@ public class RestoreService {
         private int uniqueRecords;
         private int totalVersions;
         private int deletedCount;
+        private int archivedCount;
 
         public String getObjectName() { return objectName; }
         public void setObjectName(String objectName) { this.objectName = objectName; }
@@ -892,6 +894,8 @@ public class RestoreService {
         public void setTotalVersions(int totalVersions) { this.totalVersions = totalVersions; }
         public int getDeletedCount() { return deletedCount; }
         public void setDeletedCount(int deletedCount) { this.deletedCount = deletedCount; }
+        public int getArchivedCount() { return archivedCount; }
+        public void setArchivedCount(int archivedCount) { this.archivedCount = archivedCount; }
     }
 
     public static class FieldChange {

@@ -32,8 +32,10 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -421,61 +423,93 @@ public class S3Service {
      * @return JSON string with the record data, or null if not found
      */
     public String selectRecordFromCsv(String s3Key, String recordId) {
-        log.debug("Fetching record {} from CSV {}", recordId, s3Key);
+        log.debug("Fetching record {} from CSV {} (streaming)", recordId, s3Key);
         try {
             GetObjectRequest getRequest = GetObjectRequest.builder()
                     .bucket(bucketName)
                     .key(s3Key)
                     .build();
 
-            byte[] content = s3Client.getObjectAsBytes(getRequest).asByteArray();
-            String csvContent = new String(content, java.nio.charset.StandardCharsets.UTF_8);
+            try (var responseStream = s3Client.getObject(getRequest);
+                 var reader = new BufferedReader(new InputStreamReader(responseStream, java.nio.charset.StandardCharsets.UTF_8))) {
 
-            // Parse CSV and find the record
-            String[] lines = csvContent.split("\n");
-            if (lines.length < 2) {
-                return null; // No data rows
-            }
-
-            // Parse header
-            String[] headers = parseCsvLine(lines[0]);
-
-            // Find the Id column index
-            int idIndex = -1;
-            for (int i = 0; i < headers.length; i++) {
-                if ("Id".equalsIgnoreCase(headers[i].trim())) {
-                    idIndex = i;
-                    break;
+                // Parse header line
+                String headerLine = readCsvLine(reader);
+                if (headerLine == null) {
+                    return null; // Empty file
                 }
-            }
+                String[] headers = parseCsvLine(headerLine);
 
-            if (idIndex == -1) {
-                log.warn("No 'Id' column found in CSV: {}", s3Key);
-                return null;
-            }
-
-            // Find the matching record
-            for (int i = 1; i < lines.length; i++) {
-                String[] values = parseCsvLine(lines[i]);
-                if (values.length > idIndex && recordId.equals(values[idIndex].trim())) {
-                    // Build JSON object from headers and values
-                    StringBuilder json = new StringBuilder("{");
-                    for (int j = 0; j < headers.length && j < values.length; j++) {
-                        if (j > 0) json.append(",");
-                        json.append("\"").append(escapeJson(headers[j].trim())).append("\":");
-                        json.append("\"").append(escapeJson(values[j])).append("\"");
+                // Find the Id column index
+                int idIndex = -1;
+                for (int i = 0; i < headers.length; i++) {
+                    if ("Id".equalsIgnoreCase(headers[i].trim())) {
+                        idIndex = i;
+                        break;
                     }
-                    json.append("}");
-                    return json.toString();
                 }
-            }
 
-            return null; // Record not found
+                if (idIndex == -1) {
+                    log.warn("No 'Id' column found in CSV: {}", s3Key);
+                    return null;
+                }
+
+                // Stream through rows until we find the matching record
+                String line;
+                while ((line = readCsvLine(reader)) != null) {
+                    String[] values = parseCsvLine(line);
+                    if (values.length > idIndex && recordId.equals(values[idIndex].trim())) {
+                        // Build JSON object from headers and values
+                        StringBuilder json = new StringBuilder("{");
+                        for (int j = 0; j < headers.length && j < values.length; j++) {
+                            if (j > 0) json.append(",");
+                            json.append("\"").append(escapeJson(headers[j].trim())).append("\":");
+                            json.append("\"").append(escapeJson(values[j])).append("\"");
+                        }
+                        json.append("}");
+                        log.debug("Found record {} in CSV {}", recordId, s3Key);
+                        return json.toString();
+                    }
+                }
+
+                return null; // Record not found
+            }
 
         } catch (Exception e) {
             log.error("Failed to fetch/parse CSV from S3: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Read one CSV line from a stream, handling newlines inside quoted fields.
+     * Returns null at EOF.
+     */
+    private String readCsvLine(BufferedReader reader) throws IOException {
+        StringBuilder line = new StringBuilder();
+        boolean inQuotes = false;
+        int c;
+
+        while ((c = reader.read()) != -1) {
+            char ch = (char) c;
+
+            if (ch == '"') {
+                inQuotes = !inQuotes;
+                line.append(ch);
+            } else if (ch == '\n' && !inQuotes) {
+                break;
+            } else if (ch == '\r') {
+                continue;
+            } else {
+                line.append(ch);
+            }
+        }
+
+        if (line.length() == 0 && c == -1) {
+            return null;
+        }
+
+        return line.toString();
     }
 
     /**
