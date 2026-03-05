@@ -455,7 +455,8 @@ public class PostgresService {
      */
     @PostConstruct
     public void initializeDatabase() throws SQLException {
-        if (Arrays.asList(environment.getActiveProfiles()).contains("web")) {
+        List<String> profiles = Arrays.asList(environment.getActiveProfiles());
+        if (profiles.contains("web") && !profiles.contains("demo")) {
             log.info("Web profile active - skipping database schema initialization");
             return;
         }

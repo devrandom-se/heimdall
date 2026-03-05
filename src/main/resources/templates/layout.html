@@ -87,6 +87,11 @@
         </div>
     </div>
 
+    <!-- Demo Banner -->
+    <div th:if="${demoMode}" style="background-color: #e8f4fd; border-bottom: 1px solid #b0d4f1; padding: 0.5rem 1rem; text-align: center; color: #0070d2; font-size: 0.875rem;">
+        Demo Mode — Exploring with sample data
+    </div>
+
     <!-- Main Content -->
     <div class="main-content">
         <div layout:fragment="content">

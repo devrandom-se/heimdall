@@ -380,6 +380,44 @@ public class RestoreService {
     }
 
     /**
+     * Get all unique records for a specific object type (for browsing)
+     */
+    public List<DeletedRecord> getRecordsForObject(String objectName, int page, int pageSize) {
+        List<DeletedRecord> records = new ArrayList<>();
+        String sql = """
+            SELECT DISTINCT ON (id) id, period, name, object_name, is_deleted
+            FROM objects
+            WHERE org_id = ? AND object_name = ?
+            ORDER BY id, period DESC
+            LIMIT ? OFFSET ?
+            """;
+
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, orgId);
+            stmt.setString(2, objectName);
+            stmt.setInt(3, pageSize);
+            stmt.setInt(4, page * pageSize);
+
+            try (ResultSet rs = executeQuery(stmt, "getRecordsForObject")) {
+                while (rs.next()) {
+                    DeletedRecord r = new DeletedRecord();
+                    r.setId(rs.getString("id"));
+                    r.setPeriod(rs.getInt("period"));
+                    r.setName(rs.getString("name"));
+                    r.setObjectName(rs.getString("object_name"));
+                    r.setDeleted(rs.getBoolean("is_deleted"));
+                    records.add(r);
+                }
+            }
+        } catch (SQLException e) {
+            log.error("Failed to get records for object: {}", e.getMessage());
+        }
+
+        return records;
+    }
+
+    /**
      * Count all archived records across all objects
      */
     public int countAllArchivedRecords() {
@@ -868,6 +906,7 @@ public class RestoreService {
         private int period;
         private String name;
         private String objectName;
+        private boolean isDeleted;
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
@@ -877,6 +916,11 @@ public class RestoreService {
         public void setName(String name) { this.name = name; }
         public String getObjectName() { return objectName; }
         public void setObjectName(String objectName) { this.objectName = objectName; }
+        public boolean isDeleted() { return isDeleted; }
+        public void setDeleted(boolean deleted) { isDeleted = deleted; }
+        public boolean isArchived() { return period < 0; }
+        public boolean isActive() { return period > 0 && !isDeleted; }
+        public String getFormattedPeriod() { return RestoreService.formatPeriod(period); }
     }
 
     public static class ObjectStats {

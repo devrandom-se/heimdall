@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout}">
+<head>
+    <title th:text="${objectName} + ' Records'">Records</title>
+</head>
+<body>
+<div layout:fragment="content">
+    <!-- Page Header -->
+    <div class="slds-page-header slds-page-header_record-home" style="background: white; margin-bottom: 1rem;">
+        <div class="slds-page-header__row">
+            <div class="slds-page-header__col-title">
+                <div class="slds-page-header__name">
+                    <div class="slds-page-header__title slds-truncate" th:title="${objectName} + ' Records'" th:text="${objectName} + ' Records'">Records</div>
+                </div>
+            </div>
+            <div class="slds-page-header__col-actions">
+                <a href="/objects" class="slds-button slds-button_neutral">Back to Objects</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Records Table -->
+    <div class="slds-card">
+        <div class="slds-card__header slds-grid">
+            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                <div class="slds-media__body">
+                    <h2 class="slds-card__header-title">
+                        <span th:text="${objectName} + ' (' + ${#numbers.formatInteger(totalCount, 1, 'COMMA')} + ' records)'">Records</span>
+                    </h2>
+                </div>
+            </header>
+        </div>
+        <div class="slds-card__body">
+            <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped">
+                <thead>
+                    <tr class="slds-line-height_reset">
+                        <th scope="col"><div class="slds-truncate">Name</div></th>
+                        <th scope="col"><div class="slds-truncate">Record ID</div></th>
+                        <th scope="col"><div class="slds-truncate">Period</div></th>
+                        <th scope="col"><div class="slds-truncate">Status</div></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="record : ${records}" class="slds-hint-parent">
+                        <td><div class="slds-truncate" th:text="${record.name}">Name</div></td>
+                        <td>
+                            <div class="slds-truncate">
+                                <a th:href="@{/record(id=${record.id})}" th:text="${record.id}">ID</a>
+                            </div>
+                        </td>
+                        <td><div class="slds-truncate" th:text="${record.formattedPeriod}">Period</div></td>
+                        <td>
+                            <div class="slds-truncate">
+                                <span th:if="${record.active}" class="slds-badge" style="background: #4bca81; color: white;">Active</span>
+                                <span th:if="${record.deleted}" class="slds-badge" style="background: #c23934; color: white;">Deleted</span>
+                                <span th:if="${record.archived}" class="slds-badge" style="background: #7e8be4; color: white;">Archived</span>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr th:if="${records.isEmpty()}">
+                        <td colspan="4" class="slds-text-align_center slds-p-around_medium">
+                            No records found for this object.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <!-- Pagination -->
+        <div class="slds-card__footer" th:if="${totalPages > 1}">
+            <nav class="slds-button-group" role="group">
+                <a th:href="@{/records(object=${objectName}, page=${currentPage - 1})}"
+                   th:classappend="${currentPage == 0} ? 'slds-button_disabled'"
+                   class="slds-button slds-button_neutral">Previous</a>
+                <span class="slds-button slds-button_neutral" th:text="'Page ' + (${currentPage} + 1) + ' of ' + ${totalPages}">Page 1 of 10</span>
+                <a th:href="@{/records(object=${objectName}, page=${currentPage + 1})}"
+                   th:classappend="${currentPage >= totalPages - 1} ? 'slds-button_disabled'"
+                   class="slds-button slds-button_neutral">Next</a>
+            </nav>
+        </div>
+    </div>
+</div>
+</body>
+</html>

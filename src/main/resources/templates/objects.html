@@ -37,6 +37,7 @@
                         <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Unique Records</div></th>
                         <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Total Versions</div></th>
                         <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Deleted</div></th>
+                        <th scope="col" class="slds-text-align_right"><div class="slds-truncate">Archived</div></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -45,7 +46,9 @@
                             <div class="slds-truncate" th:text="${stats.objectName}">Object</div>
                         </td>
                         <td class="slds-text-align_right">
-                            <div class="slds-truncate" th:text="${#numbers.formatInteger(stats.uniqueRecords, 1, 'COMMA')}">0</div>
+                            <div class="slds-truncate">
+                                <a th:href="@{/records(object=${stats.objectName})}" th:text="${#numbers.formatInteger(stats.uniqueRecords, 1, 'COMMA')}">0</a>
+                            </div>
                         </td>
                         <td class="slds-text-align_right">
                             <div class="slds-truncate" th:text="${#numbers.formatInteger(stats.totalVersions, 1, 'COMMA')}">0</div>
@@ -58,9 +61,17 @@
                                 <span th:if="${stats.deletedCount == 0}">0</span>
                             </div>
                         </td>
+                        <td class="slds-text-align_right">
+                            <div class="slds-truncate">
+                                <span th:if="${stats.archivedCount > 0}">
+                                    <a th:href="@{/archived(object=${stats.objectName})}" th:text="${#numbers.formatInteger(stats.archivedCount, 1, 'COMMA')}">0</a>
+                                </span>
+                                <span th:if="${stats.archivedCount == 0}">0</span>
+                            </div>
+                        </td>
                     </tr>
                     <tr th:if="${objectStats.isEmpty()}">
-                        <td colspan="4" class="slds-text-align_center slds-p-around_medium">
+                        <td colspan="5" class="slds-text-align_center slds-p-around_medium">
                             No backed up objects found.
                         </td>
                     </tr>

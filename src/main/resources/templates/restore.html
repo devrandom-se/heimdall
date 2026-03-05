@@ -200,7 +200,11 @@
         function loadRestoreForm(recordId, period) {
             fetch('/api/restore-form?id=' + encodeURIComponent(recordId) + '&period=' + period)
                 .then(function(r) {
-                    if (!r.ok) throw new Error('Failed to load form data (HTTP ' + r.status + ')');
+                    if (!r.ok) {
+                        return r.json().catch(function() { return {}; }).then(function(body) {
+                            throw new Error(body.error || 'Failed to load form data (HTTP ' + r.status + ')');
+                        });
+                    }
                     return r.json();
                 })
                 .then(function(data) {
@@ -714,7 +718,11 @@
         function loadCartItemForm(item, idx) {
             fetch('/api/restore-form?id=' + encodeURIComponent(item.id) + '&period=' + item.period)
                 .then(function(r) {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    if (!r.ok) {
+                        return r.json().catch(function() { return {}; }).then(function(body) {
+                            throw new Error(body.error || 'HTTP ' + r.status);
+                        });
+                    }
                     return r.json();
                 })
                 .then(function(data) {

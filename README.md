@@ -53,6 +53,19 @@ Heimdall backs up your entire Salesforce org to PostgreSQL and S3 on a schedule,
 - **S3-compatible storage** (AWS S3, MinIO, Backblaze B2, etc.)
 - **Salesforce metadata auto-migration** (creates backup config objects automatically)
 
+## Try It — Demo Mode
+
+No Salesforce, no AWS, no credentials. Just Docker:
+
+```bash
+docker compose -f docker-compose.demo.yml up --build
+# Open http://localhost:8080
+```
+
+This starts a self-contained environment with PostgreSQL and realistic sample data (Accounts, Contacts, Cases, EmailMessages, ContentVersions). Browse records, view version history, inspect diffs — everything works except restore (which requires a live Salesforce sandbox).
+
+Also useful for **local development** — hack on the GUI without needing any external services.
+
 ## Quick Start
 
 ### Prerequisites

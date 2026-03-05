@@ -31,6 +31,8 @@ import se.devrandom.heimdall.salesforce.objects.DescribeSObjectResult;
 import se.devrandom.heimdall.salesforce.objects.Field;
 import se.devrandom.heimdall.storage.S3Service;
 
+import org.springframework.beans.factory.annotation.Value;
+
 import java.net.URI;
 import java.time.Duration;
 import java.util.*;
@@ -49,6 +51,9 @@ public class WebController {
 
     @Autowired(required = false)
     private SandboxRestoreClient sandboxRestoreClient;
+
+    @Value("${heimdall.demo:false}")
+    private boolean demoMode;
 
     private static final int PAGE_SIZE = 50;
 
@@ -265,8 +270,11 @@ public class WebController {
         }
 
         if (sandboxRestoreClient == null || !sandboxRestoreClient.isConfigured()) {
+            String msg = demoMode
+                    ? "Compare is not available in demo mode. In a real setup, this compares your backup with the live Salesforce record."
+                    : "Sandbox restore not configured. Set heimdall.restore.sandbox-name and credentials.";
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(Map.of("success", false, "error", "Sandbox restore not configured. Set heimdall.restore.sandbox-name and credentials."));
+                    .body(Map.of("success", false, "error", msg));
         }
 
         List<RestoreService.RecordVersion> versions = restoreService.getRecordVersions(recordId);
@@ -357,8 +365,11 @@ public class WebController {
         }
 
         if (sandboxRestoreClient == null || !sandboxRestoreClient.isConfigured()) {
+            String msg = demoMode
+                    ? "Restore is not available in demo mode. In a real setup, this restores the backup data to your Salesforce sandbox."
+                    : "Sandbox restore not configured. Set heimdall.restore.sandbox-name and credentials.";
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(Map.of("success", false, "error", "Sandbox restore not configured. Set heimdall.restore.sandbox-name and credentials."));
+                    .body(Map.of("success", false, "error", msg));
         }
 
         List<RestoreService.RecordVersion> versions = restoreService.getRecordVersions(recordId);
@@ -490,10 +501,14 @@ public class WebController {
 
     @GetMapping("/api/restore-form")
     @ResponseBody
-    public ResponseEntity<RestoreFormData> restoreForm(@RequestParam("id") String recordId,
-                                                       @RequestParam("period") int period) {
+    public ResponseEntity<?> restoreForm(@RequestParam("id") String recordId,
+                                         @RequestParam("period") int period) {
         if (sandboxRestoreClient == null || !sandboxRestoreClient.isConfigured()) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+            String msg = demoMode
+                    ? "Restore form is not available in demo mode. In a real setup, this lets you edit fields before restoring to Salesforce."
+                    : "Sandbox restore not configured. Set heimdall.restore.sandbox-name and credentials.";
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", msg));
         }
 
         List<RestoreService.RecordVersion> versions = restoreService.getRecordVersions(recordId);
@@ -752,6 +767,29 @@ public class WebController {
 
         model.addAttribute("pageTitle", "Archived Records");
         return "archived";
+    }
+
+    @GetMapping("/records")
+    public String recordsForObject(
+            @RequestParam("object") String objectName,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            Model model) {
+
+        List<RestoreService.DeletedRecord> records = restoreService.getRecordsForObject(objectName, page, PAGE_SIZE);
+
+        // Use unique_records from object_stats for total count
+        Map<String, RestoreService.ObjectStats> stats = restoreService.getObjectStatistics();
+        RestoreService.ObjectStats objectStats = stats.get(objectName);
+        int totalCount = objectStats != null ? objectStats.getUniqueRecords() : 0;
+        int totalPages = (int) Math.ceil((double) totalCount / PAGE_SIZE);
+
+        model.addAttribute("objectName", objectName);
+        model.addAttribute("records", records);
+        model.addAttribute("currentPage", page);
+        model.addAttribute("totalPages", totalPages);
+        model.addAttribute("totalCount", totalCount);
+        model.addAttribute("pageTitle", objectName + " Records");
+        return "records";
     }
 
     @GetMapping("/objects")
