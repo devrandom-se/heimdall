@@ -389,7 +389,7 @@ public class S3Service {
     /**
      * Determine MIME type based on file extension
      */
-    private String getContentType(String fileExtension) {
+    String getContentType(String fileExtension) {
         if (fileExtension == null) {
             return "application/octet-stream";
         }
@@ -485,7 +485,7 @@ public class S3Service {
      * Read one CSV line from a stream, handling newlines inside quoted fields.
      * Returns null at EOF.
      */
-    private String readCsvLine(BufferedReader reader) throws IOException {
+    String readCsvLine(BufferedReader reader) throws IOException {
         StringBuilder line = new StringBuilder();
         boolean inQuotes = false;
         int c;
@@ -515,7 +515,7 @@ public class S3Service {
     /**
      * Simple CSV line parser that handles quoted fields
      */
-    private String[] parseCsvLine(String line) {
+    String[] parseCsvLine(String line) {
         java.util.List<String> values = new java.util.ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inQuotes = false;
@@ -544,7 +544,7 @@ public class S3Service {
     /**
      * Escape special characters for JSON
      */
-    private String escapeJson(String value) {
+    String escapeJson(String value) {
         if (value == null) return "";
         return value
                 .replace("\\", "\\\\")

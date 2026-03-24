@@ -69,7 +69,7 @@ public class PostgresService {
     /**
      * Calculate current period as YYMM (e.g., 2511 for November 2025)
      */
-    private int getCurrentPeriod() {
+    int getCurrentPeriod() {
         LocalDateTime now = LocalDateTime.now();
         int year = now.getYear() % 100; // Last 2 digits of year
         int month = now.getMonthValue();
@@ -357,7 +357,7 @@ public class PostgresService {
     /**
      * Read one CSV line, handling newlines inside quoted fields
      */
-    private String readCsvLine(BufferedReader reader) throws IOException {
+    String readCsvLine(BufferedReader reader) throws IOException {
         StringBuilder line = new StringBuilder();
         boolean inQuotes = false;
         int c;
@@ -389,7 +389,7 @@ public class PostgresService {
     /**
      * Parse a CSV line handling quoted fields with commas
      */
-    private String[] parseCsvLine(String line) {
+    String[] parseCsvLine(String line) {
         List<String> values = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inQuotes = false;
@@ -415,7 +415,7 @@ public class PostgresService {
      * Find the best column to use as display name.
      * Tries Name first, then common alternatives for objects that don't have a Name field.
      */
-    private int findBestNameIndex(String[] headers) {
+    int findBestNameIndex(String[] headers) {
         for (String candidate : List.of("Name", "Subject", "Title", "CaseNumber", "DeveloperName", "Label")) {
             int idx = findColumnIndex(headers, candidate);
             if (idx >= 0) return idx;
@@ -426,7 +426,7 @@ public class PostgresService {
     /**
      * Find the index of a column in the header array (case-insensitive)
      */
-    private int findColumnIndex(String[] headers, String columnName) {
+    int findColumnIndex(String[] headers, String columnName) {
         for (int i = 0; i < headers.length; i++) {
             if (headers[i].equalsIgnoreCase(columnName)) {
                 return i;
@@ -438,7 +438,7 @@ public class PostgresService {
     /**
      * Check if a value looks like a Salesforce ID (15 or 18 alphanumeric characters)
      */
-    private boolean looksLikeSalesforceId(String value) {
+    boolean looksLikeSalesforceId(String value) {
         if (value == null) return false;
         int len = value.length();
         if (len != 15 && len != 18) return false;

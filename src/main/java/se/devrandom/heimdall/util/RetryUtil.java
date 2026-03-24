@@ -106,7 +106,7 @@ public class RetryUtil {
      * @param e The exception to check
      * @return true if the error is retryable, false otherwise
      */
-    private static boolean isRetryable(Exception e) {
+    static boolean isRetryable(Exception e) {
         // Network and I/O errors are always retryable
         if (e instanceof IOException) {
             return true;
