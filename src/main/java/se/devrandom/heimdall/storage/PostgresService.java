@@ -57,13 +57,26 @@ public class PostgresService {
             @Value("${salesforce.org-id}") String orgId,
             Environment environment,
             Optional<RdsLifecycleService> rdsLifecycleService) {
-        this.jdbcUrl = jdbcUrl;
+        this.jdbcUrl = withTimeouts(jdbcUrl);
         this.username = username;
         this.password = password;
         this.orgId = orgId;
         this.environment = environment;
         this.rdsLifecycleService = rdsLifecycleService;
-        log.info("PostgresService initialized with backup database: {}", jdbcUrl);
+        log.info("PostgresService initialized with backup database: {}", this.jdbcUrl);
+    }
+
+    /**
+     * Append connect/socket timeouts to the JDBC URL so a stalled or unresponsive RDS can never
+     * hang a thread indefinitely. socketTimeout bounds each query's read, connectTimeout bounds
+     * connection establishment — both in seconds for the PostgreSQL driver.
+     */
+    private static String withTimeouts(String url) {
+        if (url == null || url.contains("socketTimeout=")) {
+            return url;
+        }
+        String sep = url.contains("?") ? "&" : "?";
+        return url + sep + "connectTimeout=30&socketTimeout=600";
     }
 
     /**

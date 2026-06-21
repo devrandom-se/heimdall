@@ -135,19 +135,8 @@ public class ObjectBackupProcessor
             }
         }
 
-        // Wait for query to complete
-        BulkQueryRequest bulkQueryStatus;
-        do {
-            bulkQueryStatus = salesforceService.checkBulkQueryStatus(bulkQueryRequest);
-            if (!bulkQueryStatus.isFinished()) {
-                try {
-                    Thread.sleep(2000);  // Poll every 2 seconds
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException(e);
-                }
-            }
-        } while (!bulkQueryStatus.isFinished());
+        // Wait for query to complete (bounded so a stuck job can't hang the run forever)
+        BulkQueryRequest bulkQueryStatus = awaitBulkQuery(bulkQueryRequest, item.name);
 
         if (!bulkQueryStatus.wasSuccessful()) {
             log.error("Query failed for {} (state: {})", item.name, bulkQueryStatus.state);
@@ -300,6 +289,36 @@ public class ObjectBackupProcessor
         postgresService.refreshObjectStats(objectName);
 
         return describe;
+    }
+
+    /** Max time to wait for a single Bulk API job to finish before giving up (prevents indefinite hangs). */
+    private static final long MAX_BULK_QUERY_WAIT_MS = 30 * 60 * 1000L; // 30 minutes
+
+    /**
+     * Poll a Bulk API job until it finishes, with a hard deadline. Each status check is already
+     * HTTP-timeout-bounded; this bounds the overall wait so a job stuck in a non-terminal state
+     * can never hang the run indefinitely. Throws once the deadline is exceeded.
+     */
+    private BulkQueryRequest awaitBulkQuery(BulkQueryRequest bulkQueryRequest, String objectName) {
+        long deadline = System.currentTimeMillis() + MAX_BULK_QUERY_WAIT_MS;
+        BulkQueryRequest status;
+        do {
+            status = salesforceService.checkBulkQueryStatus(bulkQueryRequest);
+            if (!status.isFinished()) {
+                if (System.currentTimeMillis() > deadline) {
+                    throw new RuntimeException("Bulk query for " + objectName + " did not finish within "
+                            + (MAX_BULK_QUERY_WAIT_MS / 60000) + " min (state: " + status.state
+                            + ") — aborting to avoid an indefinite hang");
+                }
+                try {
+                    Thread.sleep(2000);  // Poll every 2 seconds
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(e);
+                }
+            }
+        } while (!status.isFinished());
+        return status;
     }
 
     private void executeBackup(Heimdall_Backup_Config__c backup, DescribeSObjectResult describe, String objectName) {
@@ -614,19 +633,8 @@ public class ObjectBackupProcessor
                     throw new RuntimeException(e);
                 }
 
-                // Poll for completion
-                BulkQueryRequest bulkQueryStatus;
-                do {
-                    bulkQueryStatus = salesforceService.checkBulkQueryStatus(bulkQueryRequest);
-                    if (!bulkQueryStatus.isFinished()) {
-                        try {
-                            Thread.sleep(2000);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException(e);
-                        }
-                    }
-                } while (!bulkQueryStatus.isFinished());
+                // Poll for completion (bounded so a stuck job can't hang the run forever)
+                BulkQueryRequest bulkQueryStatus = awaitBulkQuery(bulkQueryRequest, objectName);
 
                 if (!bulkQueryStatus.wasSuccessful()) {
                     log.error("Archive query failed for {} (state: {})", objectName, bulkQueryStatus.state);
@@ -774,19 +782,8 @@ public class ObjectBackupProcessor
                     throw new RuntimeException(e);
                 }
 
-                // Poll for completion
-                BulkQueryRequest bulkQueryStatus;
-                do {
-                    bulkQueryStatus = salesforceService.checkBulkQueryStatus(bulkQueryRequest);
-                    if (!bulkQueryStatus.isFinished()) {
-                        try {
-                            Thread.sleep(2000);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException(e);
-                        }
-                    }
-                } while (!bulkQueryStatus.isFinished());
+                // Poll for completion (bounded so a stuck job can't hang the run forever)
+                BulkQueryRequest bulkQueryStatus = awaitBulkQuery(bulkQueryRequest, cdlCheckpointName);
 
                 if (!bulkQueryStatus.wasSuccessful()) {
                     log.error("CDL archive query failed for {} (state: {})", cdlCheckpointName, bulkQueryStatus.state);
