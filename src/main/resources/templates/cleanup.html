@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout}">
+<head>
+    <title>Cleanup</title>
+</head>
+<body>
+<div layout:fragment="content">
+    <div id="cleanup-root" th:data-demo="${demoMode}" th:data-default-months="${defaultMonths}">
+
+        <!-- Page Header -->
+        <div class="slds-page-header slds-page-header_record-home" style="background: white; margin-bottom: 1rem;">
+            <div class="slds-page-header__row">
+                <div class="slds-page-header__col-title">
+                    <div class="slds-page-header__name">
+                        <div class="slds-page-header__title slds-truncate" title="Cleanup Old Backups">Cleanup Old Backups</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Intro -->
+        <div class="slds-box slds-m-bottom_small" style="background:#f3f3f3;">
+            Permanently remove backups older than a chosen number of months: the period-partitioned
+            CSV objects in S3 and their database rows (objects, CSV index, backup runs).
+            <strong>Archived records are never affected</strong>, and the current months within the
+            window are kept. Review the preview before deleting — this cannot be undone.
+        </div>
+
+        <!-- Controls -->
+        <div class="slds-card slds-m-bottom_small">
+            <div class="slds-card__body slds-p-around_medium">
+                <div class="slds-form-element slds-grid slds-grid_vertical-align-end" style="gap:1rem;">
+                    <div>
+                        <label class="slds-form-element__label" for="cleanup-months">Delete backups older than (months)</label>
+                        <div class="slds-form-element__control">
+                            <input type="number" id="cleanup-months" class="slds-input" min="1" style="width:8rem;"
+                                   th:value="${defaultMonths}">
+                        </div>
+                    </div>
+                    <button class="slds-button slds-button_brand" onclick="previewCleanup()">Preview</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Result area -->
+        <div id="cleanup-result"></div>
+    </div>
+
+    <script>
+        var cleanupRoot = document.getElementById('cleanup-root');
+        var CLEANUP_DEMO = cleanupRoot.dataset.demo === 'true';
+        var cleanupPreviewData = null;
+
+        function cleanupEsc(str) {
+            if (str === null || str === undefined) return '';
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(String(str)));
+            return div.innerHTML;
+        }
+
+        function cleanupNum(n) {
+            return Number(n || 0).toLocaleString();
+        }
+
+        function currentMonths() {
+            var v = parseInt(document.getElementById('cleanup-months').value, 10);
+            return isNaN(v) ? 0 : v;
+        }
+
+        function previewCleanup() {
+            var months = currentMonths();
+            if (months < 1) {
+                document.getElementById('cleanup-result').innerHTML =
+                    '<div class="slds-notify slds-notify_alert slds-alert_error" role="alert">Months must be at least 1.</div>';
+                return;
+            }
+            document.getElementById('cleanup-result').innerHTML =
+                '<div class="slds-align_absolute-center slds-p-around_large">Loading preview...</div>';
+
+            fetch('/api/cleanup/preview?months=' + months)
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.error) {
+                        document.getElementById('cleanup-result').innerHTML =
+                            '<div class="slds-notify slds-notify_alert slds-alert_error" role="alert">' + cleanupEsc(data.error) + '</div>';
+                        return;
+                    }
+                    cleanupPreviewData = data;
+                    renderPreview(data);
+                })
+                .catch(function(err) {
+                    document.getElementById('cleanup-result').innerHTML =
+                        '<div class="slds-notify slds-notify_alert slds-alert_error" role="alert">Error loading preview: ' + cleanupEsc(String(err)) + '</div>';
+                });
+        }
+
+        function renderPreview(data) {
+            var nothing = data.totalCsvFiles === 0;
+
+            var html = '<div class="slds-card">';
+            html += '<div class="slds-card__header slds-grid"><header class="slds-media slds-media_center slds-has-flexi-truncate">' +
+                '<div class="slds-media__body"><h2 class="slds-card__header-title">Preview &mdash; backups before ' +
+                cleanupEsc(data.cutoffLabel) + ' (period &lt; ' + cleanupEsc(data.cutoffPeriod) + ')</h2></div></header></div>';
+            html += '<div class="slds-card__body slds-p-around_medium">';
+
+            if (nothing) {
+                html += '<div class="slds-align_absolute-center slds-p-around_medium">Nothing to clean up for this window.</div></div></div>';
+                document.getElementById('cleanup-result').innerHTML = html;
+                return;
+            }
+
+            html += '<table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped">' +
+                '<thead><tr class="slds-line-height_reset">' +
+                '<th scope="col"><div class="slds-truncate">Period</div></th>' +
+                '<th scope="col" class="slds-text-align_right"><div class="slds-truncate">CSV Files / S3 Objects</div></th>' +
+                '</tr></thead><tbody>';
+
+            data.periods.forEach(function(p) {
+                html += '<tr class="slds-hint-parent">' +
+                    '<td><div class="slds-truncate">' + cleanupEsc(p.label) + '</div></td>' +
+                    '<td class="slds-text-align_right"><div class="slds-truncate">' + cleanupNum(p.csvFiles) + '</div></td>' +
+                    '</tr>';
+            });
+
+            html += '<tr style="font-weight:bold;background:#f3f3f3;">' +
+                '<td><div class="slds-truncate">Total (' + data.periods.length + ' periods)</div></td>' +
+                '<td class="slds-text-align_right"><div class="slds-truncate">' + cleanupNum(data.totalCsvFiles) + '</div></td>' +
+                '</tr>';
+            html += '</tbody></table>';
+
+            html += '<div class="slds-m-top_small slds-text-body_small" style="color:#706e6b;">' +
+                cleanupNum(data.totalCsvFiles) + ' CSV files / S3 objects, plus all object rows for these periods, ' +
+                'will be deleted. The exact object-row count is reported after deletion.</div>';
+
+            html += '<div class="slds-m-top_medium">';
+            if (CLEANUP_DEMO) {
+                html += '<button class="slds-button slds-button_destructive" disabled>Delete disabled in demo mode</button>';
+            } else {
+                html += '<button class="slds-button slds-button_destructive" onclick="executeCleanup()">' +
+                    'Delete ' + cleanupNum(data.totalCsvFiles) + ' CSV files / S3 objects (+ their object rows)</button>';
+            }
+            html += '</div>';
+
+            html += '</div></div>';
+            document.getElementById('cleanup-result').innerHTML = html;
+        }
+
+        function executeCleanup() {
+            if (!cleanupPreviewData) return;
+            var months = cleanupPreviewData.months;
+            var msg = 'Permanently delete all active backups older than ' + months + ' month(s)?\n\n' +
+                'This removes ' + cleanupNum(cleanupPreviewData.totalCsvFiles) + ' CSV files / S3 objects ' +
+                '(and all object rows for these periods) across ' +
+                cleanupPreviewData.periods.length + ' period(s). This cannot be undone.';
+            if (!confirm(msg)) return;
+
+            document.getElementById('cleanup-result').innerHTML =
+                '<div class="slds-align_absolute-center slds-p-around_large">' +
+                '<div class="slds-spinner_container" style="position:relative;min-height:4rem;">' +
+                '<div class="slds-spinner slds-spinner_medium" role="status"><span class="slds-assistive-text">Deleting</span>' +
+                '<div class="slds-spinner__dot-a"></div><div class="slds-spinner__dot-b"></div></div></div></div>';
+
+            fetch('/api/cleanup/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ months: months })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    document.getElementById('cleanup-result').innerHTML =
+                        '<div class="slds-notify slds-notify_alert slds-alert_error" role="alert">' + cleanupEsc(data.error) + '</div>';
+                    return;
+                }
+                renderResult(data);
+            })
+            .catch(function(err) {
+                document.getElementById('cleanup-result').innerHTML =
+                    '<div class="slds-notify slds-notify_alert slds-alert_error" role="alert">Error: ' + cleanupEsc(String(err)) + '</div>';
+            });
+        }
+
+        function renderResult(data) {
+            var failed = data.failedS3Keys ? data.failedS3Keys.length : 0;
+            var ok = failed === 0;
+
+            var html = '<div class="slds-box slds-m-bottom_small" style="background:' + (ok ? '#d4edda' : '#fff3cd') + ';">' +
+                '<strong>Cleanup ' + (ok ? 'complete' : 'completed with S3 warnings') + '</strong> &mdash; backups before period ' +
+                cleanupEsc(data.cutoffPeriod) + ' removed.</div>';
+
+            html += '<table class="slds-table slds-table_cell-buffer slds-table_bordered">' +
+                '<tbody>' +
+                '<tr><td>Object rows deleted</td><td class="slds-text-align_right">' + cleanupNum(data.deletedObjectRows) + '</td></tr>' +
+                '<tr><td>CSV index rows deleted</td><td class="slds-text-align_right">' + cleanupNum(data.deletedCsvFiles) + '</td></tr>' +
+                '<tr><td>Backup runs deleted</td><td class="slds-text-align_right">' + cleanupNum(data.deletedBackupRuns) + '</td></tr>' +
+                '<tr><td>S3 objects deleted</td><td class="slds-text-align_right">' + cleanupNum(data.deletedS3Objects) + '</td></tr>' +
+                '</tbody></table>';
+
+            if (failed > 0) {
+                html += '<div class="slds-notify slds-notify_alert slds-alert_warning slds-m-top_small" role="alert">' +
+                    failed + ' S3 object(s) failed to delete and are now orphaned (logged for manual cleanup).</div>';
+            }
+
+            document.getElementById('cleanup-result').innerHTML = html;
+            cleanupPreviewData = null;
+        }
+    </script>
+</div>
+</body>
+</html>

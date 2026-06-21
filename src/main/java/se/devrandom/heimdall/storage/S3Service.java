@@ -42,7 +42,9 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -595,6 +597,46 @@ public class S3Service {
             log.error("Failed to generate presigned URL for {}: {}", s3Key, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Delete a list of S3 objects by key. Batches into groups of 1000 (the S3
+     * DeleteObjects API limit). Returns the keys that failed to delete (empty if all succeeded).
+     */
+    public List<String> deleteObjects(List<String> keys) {
+        List<String> failed = new ArrayList<>();
+        if (keys == null || keys.isEmpty()) {
+            return failed;
+        }
+
+        final int batchSize = 1000;
+        for (int i = 0; i < keys.size(); i += batchSize) {
+            List<String> batch = keys.subList(i, Math.min(i + batchSize, keys.size()));
+            List<ObjectIdentifier> identifiers = new ArrayList<>(batch.size());
+            for (String key : batch) {
+                identifiers.add(ObjectIdentifier.builder().key(key).build());
+            }
+
+            DeleteObjectsRequest request = DeleteObjectsRequest.builder()
+                    .bucket(bucketName)
+                    .delete(Delete.builder().objects(identifiers).build())
+                    .build();
+
+            try {
+                DeleteObjectsResponse response = s3Client.deleteObjects(request);
+                for (S3Error error : response.errors()) {
+                    failed.add(error.key());
+                    log.error("Failed to delete S3 object {}: {} ({})", error.key(), error.message(), error.code());
+                }
+                log.info("Deleted {} S3 objects ({} failed) in batch",
+                        batch.size() - response.errors().size(), response.errors().size());
+            } catch (Exception e) {
+                log.error("Batch delete of {} S3 objects failed: {}", batch.size(), e.getMessage());
+                failed.addAll(batch);
+            }
+        }
+
+        return failed;
     }
 
     public String getBucketName() {

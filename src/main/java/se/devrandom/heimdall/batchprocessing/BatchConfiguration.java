@@ -76,11 +76,22 @@ public class BatchConfiguration {
     @Bean
     public Job extractSObjectDescriptionJob(JobRepository jobRepository,
                                             JobCompletionNotificationListener listener,
-                                            Step step1) {
+                                            Step step1,
+                                            Step retentionCleanupStep) {
         return new JobBuilder("extractSObjectDescriptionJob", jobRepository)
                 .incrementer(new RunIdIncrementer())
                 .listener(listener)
                 .start(step1)
+                .next(retentionCleanupStep)  // gated cleanup; only runs if step1 (backup) succeeded
+                .build();
+    }
+
+    @Bean
+    public Step retentionCleanupStep(JobRepository jobRepository,
+                                     PlatformTransactionManager transactionManager,
+                                     RetentionCleanupTasklet retentionCleanupTasklet) {
+        return new StepBuilder("retentionCleanupStep", jobRepository)
+                .tasklet(retentionCleanupTasklet, transactionManager)
                 .build();
     }
 

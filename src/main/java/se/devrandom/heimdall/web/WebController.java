@@ -49,6 +49,9 @@ public class WebController {
     @Autowired
     private S3Service s3Service;
 
+    @Autowired
+    private RetentionService retentionService;
+
     @Autowired(required = false)
     private SandboxRestoreClient sandboxRestoreClient;
 
@@ -798,5 +801,61 @@ public class WebController {
         model.addAttribute("objectStats", stats.values());
         model.addAttribute("pageTitle", "Object Browser");
         return "objects";
+    }
+
+    // --- Retention cleanup ---
+
+    @GetMapping("/cleanup")
+    public String cleanupPage(Model model) {
+        model.addAttribute("defaultMonths", retentionService.getDefaultRetentionMonths());
+        model.addAttribute("demoMode", demoMode);
+        model.addAttribute("pageTitle", "Cleanup");
+        return "cleanup";
+    }
+
+    @GetMapping("/api/cleanup/preview")
+    @ResponseBody
+    public ResponseEntity<?> cleanupPreview(
+            @RequestParam(value = "months", required = false) Integer months) {
+        int m = months != null ? months : retentionService.getDefaultRetentionMonths();
+        if (m < 1) {
+            return ResponseEntity.badRequest().body(Map.of("error", "months must be >= 1"));
+        }
+        try {
+            return ResponseEntity.ok(retentionService.preview(m));
+        } catch (Exception e) {
+            log.error("Cleanup preview failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Preview failed: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping("/api/cleanup/execute")
+    @ResponseBody
+    public ResponseEntity<?> cleanupExecute(@RequestBody Map<String, Object> request) {
+        if (demoMode) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", "Cleanup is not available in demo mode."));
+        }
+        Object monthsObj = request.get("months");
+        if (monthsObj == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Missing months"));
+        }
+        int m;
+        try {
+            m = Integer.parseInt(String.valueOf(monthsObj));
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid months format"));
+        }
+        if (m < 1) {
+            return ResponseEntity.badRequest().body(Map.of("error", "months must be >= 1"));
+        }
+        try {
+            return ResponseEntity.ok(retentionService.execute(m));
+        } catch (Exception e) {
+            log.error("Cleanup execute failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Cleanup failed: " + e.getMessage()));
+        }
     }
 }

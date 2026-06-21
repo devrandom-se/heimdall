@@ -82,6 +82,28 @@ Parameters:
       - "false"
     Description: Enable scheduled backup
 
+  # Retention cleanup (opt-in: deletes backups older than RetentionMonths once a month)
+  EnableRetentionCleanup:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: "Enable the monthly retention cleanup step in the backup job (DELETES old backups)"
+
+  RetentionMonths:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    Description: "Delete active backups older than this many months"
+
+  RetentionRunOnDay:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 28
+    Description: "Day of month the cleanup runs (batch runs daily; this gate keeps it monthly). Max 28 so it fires every month."
+
   # GUI Authentication (optional - enables secure web interface)
   EnableBastion:
     Type: String
@@ -417,6 +439,12 @@ Resources:
               Value: !Sub ${AWS::StackName}-db
             - Name: HEIMDALL_API_LIMIT_STOP_AT_PERCENT
               Value: "50"
+            - Name: HEIMDALL_RETENTION_CLEANUP_ENABLED
+              Value: !Ref EnableRetentionCleanup
+            - Name: HEIMDALL_RETENTION_MONTHS
+              Value: !Sub "${RetentionMonths}"
+            - Name: HEIMDALL_RETENTION_RUN_ON_DAY
+              Value: !Sub "${RetentionRunOnDay}"
           Secrets:
             - Name: POSTGRES_PASSWORD
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/rds/password

@@ -788,6 +788,128 @@ public class PostgresService {
         return -getCurrentPeriod();
     }
 
+    /** Per-period breakdown of what a retention cleanup would remove (one CSV file == one S3 object). */
+    public record CleanupPeriod(int period, long csvFiles) {}
+
+    /** Dry-run summary of what a retention cleanup would remove. */
+    public record CleanupPreview(List<CleanupPeriod> periods, long totalCsvFiles) {}
+
+    /** Number of rows removed per table by a retention cleanup. */
+    public record CleanupDeletionResult(int objectRows, int csvFiles, int backupRuns) {}
+
+    /**
+     * Compute what a retention cleanup would remove for periods older than cutoffPeriod.
+     * Counts CSV files (one per S3 object) from the small csvfiles table — it deliberately does
+     * NOT count the huge objects table, which would be far too slow for an interactive preview.
+     * Only active backups are considered (period > 0); archives (period < 0) are never included.
+     * csvfiles has no org_id, so they are filtered by the OrgId=.../ prefix in s3path.
+     * Read-only — mutates nothing.
+     */
+    public CleanupPreview getCleanupPreview(int cutoffPeriod) {
+        String pathPrefix = "OrgId=" + orgId + "/%";
+        List<CleanupPeriod> periods = new ArrayList<>();
+        long totalCsvFiles = 0;
+        String sql = "SELECT period, COUNT(*) AS cnt FROM csvfiles "
+                + "WHERE period > 0 AND period < ? AND s3path LIKE ? GROUP BY period ORDER BY period";
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, username, password);
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setInt(1, cutoffPeriod);
+            stmt.setString(2, pathPrefix);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    long cnt = rs.getLong("cnt");
+                    periods.add(new CleanupPeriod(rs.getInt("period"), cnt));
+                    totalCsvFiles += cnt;
+                }
+            }
+        } catch (SQLException e) {
+            log.error("Failed to compute cleanup preview (cutoff {}): {}", cutoffPeriod, e.getMessage());
+            throw new RuntimeException("Failed to compute cleanup preview", e);
+        }
+        return new CleanupPreview(periods, totalCsvFiles);
+    }
+
+    /**
+     * Return the S3 keys (one per CSV file) to delete for periods older than cutoffPeriod.
+     * Same filter as the preview; used by execute to drive the S3 deletion.
+     */
+    public List<String> getS3PathsToDelete(int cutoffPeriod) {
+        String pathPrefix = "OrgId=" + orgId + "/%";
+        List<String> paths = new ArrayList<>();
+        String sql = "SELECT s3path FROM csvfiles WHERE period > 0 AND period < ? AND s3path LIKE ?";
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, username, password);
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setInt(1, cutoffPeriod);
+            stmt.setString(2, pathPrefix);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    paths.add(rs.getString("s3path"));
+                }
+            }
+        } catch (SQLException e) {
+            log.error("Failed to list S3 paths to delete (cutoff {}): {}", cutoffPeriod, e.getMessage());
+            throw new RuntimeException("Failed to list S3 paths to delete", e);
+        }
+        return paths;
+    }
+
+    /**
+     * Delete all active backups (period > 0) older than cutoffPeriod from the DB. Archives
+     * (period < 0) are untouched. The huge objects table is deleted in ctid-chunks of batchSize
+     * with a commit per chunk (autoCommit) so it never holds a long lock or spikes WAL; the small
+     * csvfiles/backup_runs tables are deleted in one statement each. Re-runnable / idempotent.
+     * Returns the per-table row counts removed.
+     */
+    public CleanupDeletionResult deleteBackupsBefore(int cutoffPeriod, int batchSize) {
+        if (batchSize < 1) {
+            batchSize = 50000;
+        }
+        String pathPrefix = "OrgId=" + orgId + "/%";
+        int totalObjs = 0;
+        int runs;
+        int csvs;
+        String objSql = "DELETE FROM objects WHERE ctid IN ("
+                + "SELECT ctid FROM objects WHERE org_id = ? AND period > 0 AND period < ? LIMIT ?)";
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, username, password)) {
+            conn.setAutoCommit(true); // each chunk commits on its own — no long-running transaction
+
+            int batch;
+            do {
+                try (PreparedStatement stmt = conn.prepareStatement(objSql)) {
+                    stmt.setString(1, orgId);
+                    stmt.setInt(2, cutoffPeriod);
+                    stmt.setInt(3, batchSize);
+                    batch = stmt.executeUpdate();
+                }
+                totalObjs += batch;
+                if (batch > 0) {
+                    log.info("Cleanup: {} object rows deleted so far (cutoff {})", totalObjs, cutoffPeriod);
+                }
+            } while (batch > 0);
+
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "DELETE FROM backup_runs WHERE org_id = ? AND period > 0 AND period < ?")) {
+                stmt.setString(1, orgId);
+                stmt.setInt(2, cutoffPeriod);
+                runs = stmt.executeUpdate();
+            }
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "DELETE FROM csvfiles WHERE period > 0 AND period < ? AND s3path LIKE ?")) {
+                stmt.setInt(1, cutoffPeriod);
+                stmt.setString(2, pathPrefix);
+                csvs = stmt.executeUpdate();
+            }
+
+            log.info("Cleanup deleted {} object rows, {} csv files, {} backup runs (period < {}, batch {})",
+                    totalObjs, csvs, runs, cutoffPeriod, batchSize);
+            return new CleanupDeletionResult(totalObjs, csvs, runs);
+        } catch (SQLException e) {
+            log.error("Cleanup deletion failed (cutoff {}, {} object rows deleted before failure): {}",
+                    cutoffPeriod, totalObjs, e.getMessage());
+            throw new RuntimeException("Cleanup deletion failed", e);
+        }
+    }
+
     /**
      * Create a new archive run in the database with negative period and archive expression.
      */
