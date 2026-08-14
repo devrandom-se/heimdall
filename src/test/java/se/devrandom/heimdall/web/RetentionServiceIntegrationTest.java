@@ -27,7 +27,7 @@ class RetentionServiceIntegrationTest extends PostgresTestBase {
     void setUp() throws Exception {
         postgresService = new PostgresService(
                 getJdbcUrl(), getUsername(), getPassword(),
-                ORG_ID, new org.springframework.core.env.StandardEnvironment(),
+                ORG_ID, true, new org.springframework.core.env.StandardEnvironment(),
                 Optional.empty());
         postgresService.initializeDatabase();
 

@@ -23,7 +23,7 @@ class PostgresServiceCsvParsingTest {
         // Construct with dummy values - we only test pure methods
         service = new PostgresService(
                 "jdbc:postgresql://localhost/test", "user", "pass",
-                "00D000000000001", null, java.util.Optional.empty());
+                "00D000000000001", true, null, java.util.Optional.empty());
     }
 
     // ===== parseCsvLine tests =====

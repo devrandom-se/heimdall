@@ -27,7 +27,7 @@ class PostgresServiceIntegrationTest extends PostgresTestBase {
         // Use Spring's Environment mock - pass null, it's only used in @PostConstruct guard
         service = new PostgresService(
                 getJdbcUrl(), getUsername(), getPassword(),
-                ORG_ID, new org.springframework.core.env.StandardEnvironment(),
+                ORG_ID, true, new org.springframework.core.env.StandardEnvironment(),
                 Optional.empty());
 
         // Initialize database tables
@@ -62,6 +62,32 @@ class PostgresServiceIntegrationTest extends PostgresTestBase {
     void initializeDatabase_isIdempotent() throws SQLException {
         // Should not throw on second call
         assertDoesNotThrow(() -> service.initializeDatabase());
+    }
+
+    @Test
+    void metadata_index_dropped_when_search_index_disabled() throws SQLException {
+        // setUp ran with the index enabled, so it exists
+        assertTrue(metadataIndexExists());
+
+        PostgresService disabledService = new PostgresService(
+                getJdbcUrl(), getUsername(), getPassword(),
+                ORG_ID, false, new org.springframework.core.env.StandardEnvironment(),
+                Optional.empty());
+        disabledService.initializeDatabase();
+        assertFalse(metadataIndexExists());
+
+        // Re-enabling recreates it
+        service.initializeDatabase();
+        assertTrue(metadataIndexExists());
+    }
+
+    private boolean metadataIndexExists() throws SQLException {
+        try (Connection conn = DriverManager.getConnection(getJdbcUrl(), getUsername(), getPassword());
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT 1 FROM pg_indexes WHERE indexname = 'objects_metadata_trgm_idx'")) {
+            return rs.next();
+        }
     }
 
     // ===== CSV processing =====

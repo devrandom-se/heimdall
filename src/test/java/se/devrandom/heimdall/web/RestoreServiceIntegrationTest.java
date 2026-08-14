@@ -38,7 +38,7 @@ class RestoreServiceIntegrationTest extends PostgresTestBase {
         // Initialize PostgresService to create schema
         postgresService = new PostgresService(
                 getJdbcUrl(), getUsername(), getPassword(),
-                ORG_ID, new org.springframework.core.env.StandardEnvironment(),
+                ORG_ID, true, new org.springframework.core.env.StandardEnvironment(),
                 Optional.empty());
         postgresService.initializeDatabase();
 

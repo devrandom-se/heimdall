@@ -46,6 +46,7 @@ public class PostgresService {
     private final String username;
     private final String password;
     private final String orgId;
+    private final boolean metadataIndexEnabled;
     private final Environment environment;
     private final Optional<RdsLifecycleService> rdsLifecycleService;
 
@@ -55,12 +56,14 @@ public class PostgresService {
             @Value("${postgres.backup.username}") String username,
             @Value("${postgres.backup.password}") String password,
             @Value("${salesforce.org-id}") String orgId,
+            @Value("${heimdall.search.metadata-index-enabled:true}") boolean metadataIndexEnabled,
             Environment environment,
             Optional<RdsLifecycleService> rdsLifecycleService) {
         this.jdbcUrl = withTimeouts(jdbcUrl);
         this.username = username;
         this.password = password;
         this.orgId = orgId;
+        this.metadataIndexEnabled = metadataIndexEnabled;
         this.environment = environment;
         this.rdsLifecycleService = rdsLifecycleService;
         log.info("PostgresService initialized with backup database: {}", this.jdbcUrl);
@@ -563,17 +566,24 @@ public class PostgresService {
             stmt.execute(createTablesSql);
             log.info("Database tables initialized successfully (csvfiles, objects, backup_runs)");
 
-            // pg_trgm extension and index (separate - extension creation may require elevated privileges)
-            try {
-                stmt.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm");
-                stmt.execute("""
-                    CREATE INDEX IF NOT EXISTS objects_metadata_trgm_idx
-                        ON objects USING GIN ((metadata::text) gin_trgm_ops)
-                        WHERE metadata IS NOT NULL
-                    """);
-                log.info("pg_trgm extension and metadata trigram index created successfully");
-            } catch (SQLException e) {
-                log.warn("Could not create pg_trgm extension/index (may require superuser): {}", e.getMessage());
+            // pg_trgm extension and index (separate - extension creation may require elevated privileges).
+            // The index only serves the GUI free-text search and can grow larger than the table's
+            // heap, so deployments without the GUI can disable it. Disabling drops an existing index.
+            if (metadataIndexEnabled) {
+                try {
+                    stmt.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+                    stmt.execute("""
+                        CREATE INDEX IF NOT EXISTS objects_metadata_trgm_idx
+                            ON objects USING GIN ((metadata::text) gin_trgm_ops)
+                            WHERE metadata IS NOT NULL
+                        """);
+                    log.info("pg_trgm extension and metadata trigram index created successfully");
+                } catch (SQLException e) {
+                    log.warn("Could not create pg_trgm extension/index (may require superuser): {}", e.getMessage());
+                }
+            } else {
+                stmt.execute("DROP INDEX IF EXISTS objects_metadata_trgm_idx");
+                log.info("Metadata trigram index disabled - dropped index if it existed (GUI free-text search will fall back to sequential scans)");
             }
         }
     }

@@ -97,6 +97,14 @@ Parameters:
     MinValue: 1
     Description: "Delete active backups older than this many months"
 
+  EnableMetadataSearchIndex:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: "Trigram index powering GUI free-text search. Disable on GUI-less deployments to save significant storage (false drops an existing index)"
+
   RetentionRunOnDay:
     Type: Number
     Default: 15
@@ -445,6 +453,8 @@ Resources:
               Value: !Sub "${RetentionMonths}"
             - Name: HEIMDALL_RETENTION_RUN_ON_DAY
               Value: !Sub "${RetentionRunOnDay}"
+            - Name: HEIMDALL_SEARCH_METADATA_INDEX_ENABLED
+              Value: !Ref EnableMetadataSearchIndex
           Secrets:
             - Name: POSTGRES_PASSWORD
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/rds/password
