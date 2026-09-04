@@ -23,6 +23,10 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -69,6 +73,9 @@ public class BackupStatisticsService {
 
     // Failed ContentVersion IDs for debugging (bounded to prevent memory issues)
     private final ConcurrentLinkedQueue<String> failedContentVersionIds = new ConcurrentLinkedQueue<>();
+
+    // Objects whose backup failed or stopped early in this run (object name -> reason)
+    private final ConcurrentHashMap<String, String> failedObjects = new ConcurrentHashMap<>();
 
     // ===== ContentVersion Statistics Methods =====
 
@@ -129,6 +136,18 @@ public class BackupStatisticsService {
     }
 
     // ===== Archive Statistics Methods =====
+
+    /**
+     * Record that an object's backup failed or stopped early. Drives the summary report and the process exit code.
+     */
+    public void recordObjectFailure(String objectName, String reason) {
+        failedObjects.put(objectName, reason == null ? "unknown error" : reason);
+    }
+
+    /** Failed objects in name order, empty when the run was clean. */
+    public Map<String, String> getFailedObjects() {
+        return Collections.unmodifiableMap(new TreeMap<>(failedObjects));
+    }
 
     public void incrementObjectsWithArchiveEnabled() {
         objectsWithArchiveEnabled.incrementAndGet();
@@ -233,6 +252,12 @@ public class BackupStatisticsService {
         report.append(String.format("  - Total CSV files uploaded: %,d%n", csvFilesUploaded.get()));
         report.append(String.format("  - Total records processed: %,d%n", totalRecordsProcessed.get()));
         report.append(String.format("  - Deleted records processed: %,d%n", deletedRecordsProcessed.get()));
+        report.append("\n");
+
+        // Objects that failed or stopped early
+        Map<String, String> failed = getFailedObjects();
+        report.append(String.format("Objects failed: %,d%n", failed.size()));
+        failed.forEach((name, reason) -> report.append(String.format("  - %s: %s%n", name, reason)));
         report.append("\n");
 
         // Archive Statistics
@@ -374,6 +399,7 @@ public class BackupStatisticsService {
         totalRecordsArchived.set(0);
         contentDocumentLinksArchived.set(0);
         failedContentVersionIds.clear();
+        failedObjects.clear();
         jobEndTime = null;
 
         log.info("Statistics reset");

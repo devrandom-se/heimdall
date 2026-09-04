@@ -103,6 +103,8 @@ export $(cat .env | xargs)
 ./mvnw spring-boot:run
 ```
 
+The process exits with code 0 on a clean run, 1 if the job itself failed, and 2 if it completed but at least one object failed, stopped early, or was skipped because the API limit was reached. The job summary at the end of the log lists the affected objects.
+
 ### 4. Run Restore GUI
 
 ```bash

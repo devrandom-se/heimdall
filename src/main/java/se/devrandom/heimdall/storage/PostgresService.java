@@ -769,6 +769,36 @@ public class PostgresService {
     }
 
     /**
+     * Mark every RUNNING backup run of this org as ABANDONED. Called at job start.
+     * Heimdall runs as a single scheduled task, so a RUNNING row at job start belongs to a run that died
+     * before it could complete its bookkeeping. Concurrent-instance detection (checkpoint freshness) is a
+     * roadmap item; until then this keeps backup_runs.status truthful after a crash.
+     *
+     * @return one description per abandoned run, for logging
+     */
+    public List<String> abandonStaleRuns() throws SQLException {
+        String sql = """
+            UPDATE backup_runs
+            SET status = 'ABANDONED',
+                completed_at = NOW(),
+                error_message = 'Abandoned at next job start: previous run did not complete'
+            WHERE org_id = ? AND status = 'RUNNING'
+            RETURNING object_name || ' (period ' || period || ', run ' || run_id || ')'
+            """;
+
+        List<String> abandoned = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, username, password);
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, orgId);
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                abandoned.add(rs.getString(1));
+            }
+        }
+        return abandoned;
+    }
+
+    /**
      * Refresh pre-computed statistics for a single object in the object_stats table.
      * Called after each object's backup completes.
      */

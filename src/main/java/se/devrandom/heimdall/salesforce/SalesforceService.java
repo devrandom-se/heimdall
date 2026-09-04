@@ -23,10 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -34,7 +31,6 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.devrandom.heimdall.config.SalesforceCredentials;
 import se.devrandom.heimdall.salesforce.objects.*;
@@ -49,7 +45,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.spec.PKCS8EncodedKeySpec;
@@ -70,7 +65,6 @@ public class SalesforceService {
     private static final Integer MAX_BATCH_SIZE = 200000;
     private static final Integer CONTENTVERSION_BASE_LIMIT = 4000;
     private static final Integer CONTENTVERSION_CACHED_LIMIT = 50000;
-    private static final Integer MAX_RECORDS = 2000;
     private static final Integer BATCH_FAST_THRESHOLD_SECONDS = 30;
 
     // Dynamic batch size per object - adjusts during runtime
@@ -93,9 +87,11 @@ public class SalesforceService {
     private final Set<String> globalChecksumCache;
     private final Map<String, Set<String>> referenceFieldsCache = new ConcurrentHashMap<>();
     private final Optional<ApiLimitTracker> apiLimitTracker;
+    private final BulkQueryResultDownloader resultDownloader;
 
     private Map<String, Heimdall_Backup_Config__c> downloadObjectBackupRecords() {
-        Map<String, Heimdall_Backup_Config__c> resultMap = new HashMap<>();
+        // ConcurrentHashMap: the map is updated from the 4 step threads while objects are processed
+        Map<String, Heimdall_Backup_Config__c> resultMap = new ConcurrentHashMap<>();
 
         try {
             log.info("Fetching existing Heimdall_Backup_Config__c records from Salesforce...");
@@ -147,6 +143,8 @@ public class SalesforceService {
         this.apiLimitTracker = apiLimitTracker;
 
         salesforceAccessToken = loginToSalesforce();
+        resultDownloader = new BulkQueryResultDownloader(webClient, salesforceCredentials.getApiVersion(),
+                () -> salesforceAccessToken.accessToken, apiLimitTracker, this::getBatchSize, Paths.get("/tmp"));
 
         // Initialize API limit tracker from /limits endpoint
         apiLimitTracker.ifPresent(this::initializeApiLimits);
@@ -488,23 +486,6 @@ public class SalesforceService {
     }
 
     /**
-     * Result from downloading CSV (before S3/PostgreSQL processing).
-     * Used for pipeline optimization to allow starting the next Bulk Query
-     * while processing the current CSV.
-     */
-    public static class CsvDownloadResult {
-        public Path csvPath;
-        public String lastId;
-        public java.sql.Timestamp lastModstamp;
-        public int recordCount;
-        public boolean hasMoreRecords;
-        public String objectName;
-        public boolean isQueryAll;
-
-        public CsvDownloadResult() {}
-    }
-
-    /**
      * Runs a fast COUNT() query to check if there are new records since the last backup.
      * This is much faster than creating a Bulk API job.
      *
@@ -780,191 +761,6 @@ public class SalesforceService {
         throw new RuntimeException(lastException);
     }
 
-    private static class CsvLastRow {
-        String lastId;
-        java.util.Date lastSystemModstamp;
-        int rowCount;
-        boolean valid = true;
-        String validationError;
-    }
-
-    /**
-     * Exception thrown when CSV validation fails (truncated data, missing Id, etc.)
-     */
-    public static class CsvValidationException extends RuntimeException {
-        public CsvValidationException(String message) {
-            super(message);
-        }
-    }
-
-    /**
-     * Reads a complete CSV record (which may span multiple lines if fields contain newlines)
-     */
-    private String readCsvRecord(java.io.BufferedReader reader) throws IOException {
-        StringBuilder record = new StringBuilder();
-        boolean inQuotes = false;
-        int c;
-
-        while ((c = reader.read()) != -1) {
-            char ch = (char) c;
-
-            if (ch == '"') {
-                // Check for escaped quote ("")
-                reader.mark(1);
-                int next = reader.read();
-                if (next == '"' && inQuotes) {
-                    // Escaped quote - add both to record
-                    record.append(ch).append((char) next);
-                } else {
-                    // Regular quote - toggle inQuotes
-                    record.append(ch);
-                    inQuotes = !inQuotes;
-                    // Put back the character we read ahead
-                    if (next != -1) {
-                        reader.reset();
-                    }
-                }
-            } else if (ch == '\n' && !inQuotes) {
-                // End of record
-                return record.toString();
-            } else if (ch == '\r') {
-                // Handle \r\n line endings - check if next is \n
-                reader.mark(1);
-                int next = reader.read();
-                if (next == '\n' && !inQuotes) {
-                    // End of record (Windows line ending)
-                    return record.toString();
-                } else {
-                    // Not end of record, add \r to record
-                    record.append(ch);
-                    if (next != -1) {
-                        reader.reset();
-                    }
-                }
-            } else {
-                record.append(ch);
-            }
-        }
-
-        // End of file - return what we have if anything
-        return record.length() > 0 ? record.toString() : null;
-    }
-
-    private CsvLastRow extractLastRowInfo(Path csvPath, boolean isQueryAll) {
-        CsvLastRow result = new CsvLastRow();
-        result.rowCount = 0;
-
-        try (java.io.BufferedReader reader = Files.newBufferedReader(csvPath, StandardCharsets.UTF_8)) {
-            // Read header as a complete record
-            String headerLine = readCsvRecord(reader);
-            if (headerLine == null) {
-                return result;
-            }
-
-            String[] headers = parseCsvLineSimple(headerLine);
-            int idIndex = -1;
-            int systemModstampIndex = -1;
-
-            for (int i = 0; i < headers.length; i++) {
-                if (headers[i].trim().equalsIgnoreCase("Id")) {
-                    idIndex = i;
-                }
-                if (headers[i].trim().equalsIgnoreCase("SystemModstamp")) {
-                    systemModstampIndex = i;
-                }
-            }
-
-            if (idIndex < 0) {
-                log.warn("Id column not found in CSV for {}", csvPath.getFileName());
-            }
-            if (systemModstampIndex < 0) {
-                log.warn("SystemModstamp column not found in CSV for {}", csvPath.getFileName());
-            }
-
-            // Read all records to find the last one
-            String lastRecord = null;
-            String record;
-            while ((record = readCsvRecord(reader)) != null) {
-                if (!record.trim().isEmpty()) {
-                    result.rowCount++;
-                    lastRecord = record;
-                }
-            }
-
-            if (lastRecord != null && idIndex >= 0) {
-                String[] values = parseCsvLineSimple(lastRecord);
-
-                // VALIDATION: Id column (now last in SOQL) must exist and not be empty
-                // If CSV was truncated, the last column will be missing or empty
-                if (idIndex >= values.length) {
-                    result.valid = false;
-                    result.validationError = String.format(
-                        "CSV truncated: Id column index %d >= values length %d. Last row: %s",
-                        idIndex, values.length, lastRecord.length() > 100 ? lastRecord.substring(0, 100) + "..." : lastRecord);
-                    log.error("CSV validation failed for {}: {}", csvPath.getFileName(), result.validationError);
-                    return result;
-                }
-
-                result.lastId = values[idIndex].trim();
-
-                // VALIDATION: Id must not be empty (indicates truncated data)
-                if (result.lastId.isEmpty()) {
-                    result.valid = false;
-                    result.validationError = String.format(
-                        "CSV truncated: Id column is empty on last row. Last row: %s",
-                        lastRecord.length() > 100 ? lastRecord.substring(0, 100) + "..." : lastRecord);
-                    log.error("CSV validation failed for {}: {}", csvPath.getFileName(), result.validationError);
-                    return result;
-                }
-
-                // VALIDATION: Id must look like a Salesforce ID (15 or 18 alphanumeric chars)
-                if (!result.lastId.matches("^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$")) {
-                    result.valid = false;
-                    result.validationError = String.format(
-                        "CSV corrupted: Invalid Id format '%s' on last row", result.lastId);
-                    log.error("CSV validation failed for {}: {}", csvPath.getFileName(), result.validationError);
-                    return result;
-                }
-
-                log.debug("Extracted and validated lastId: {}", result.lastId);
-
-                if (systemModstampIndex >= 0 && systemModstampIndex < values.length) {
-                    String modstampStr = values[systemModstampIndex].trim();
-                    try {
-                        // Try multiple date formats
-                        java.text.SimpleDateFormat formatter;
-                        if (modstampStr.contains("+")) {
-                            formatter = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
-                        } else if (modstampStr.endsWith("Z")) {
-                            formatter = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
-                        } else {
-                            formatter = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
-                        }
-                        formatter.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
-                        result.lastSystemModstamp = formatter.parse(modstampStr);
-                        log.debug("Extracted lastSystemModstamp: {}", result.lastSystemModstamp);
-                    } catch (java.text.ParseException e) {
-                        log.warn("Failed to parse SystemModstamp '{}': {}", modstampStr, e.getMessage());
-                    }
-                }
-            } else if (result.rowCount > 0 && idIndex >= 0) {
-                // We had records but couldn't extract last record - something is wrong
-                result.valid = false;
-                result.validationError = "Had " + result.rowCount + " records but lastRecord was null";
-                log.error("CSV validation failed for {}: {}", csvPath.getFileName(), result.validationError);
-            }
-        } catch (IOException e) {
-            log.error("Error reading CSV file {}: {}", csvPath, e.getMessage());
-            result.valid = false;
-            result.validationError = "IO error: " + e.getMessage();
-        }
-
-        return result;
-    }
-
-    /**
-     * Simple CSV parser that handles quoted fields and escaped quotes ("")
-     */
     /**
      * Read a complete CSV line from reader, handling newlines within quoted fields
      */
@@ -1004,392 +800,12 @@ public class SalesforceService {
         return line.length() > 0 ? line.toString() : null;
     }
 
-    private String[] parseCsvLineSimple(String line) {
-        List<String> values = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean inQuotes = false;
-
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-
-            if (c == '"') {
-                // Check for escaped quote ("")
-                if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
-                    // This is an escaped quote - add one quote to current value
-                    current.append('"');
-                    i++; // Skip the next quote
-                } else {
-                    // This is a field delimiter quote - toggle inQuotes
-                    inQuotes = !inQuotes;
-                }
-            } else if (c == ',' && !inQuotes) {
-                values.add(current.toString());
-                current = new StringBuilder();
-            } else {
-                current.append(c);
-            }
-        }
-        values.add(current.toString());
-
-        return values.toArray(new String[0]);
-    }
-
-    /**
-     * Download query results from Bulk API and process them
-     * @param bulkQueryRequest The bulk query request
-     * @param initialRecordCount Starting record count (for resuming)
-     * @return BackupBatchResult with checkpoint info
-     */
-    public BackupBatchResult getQueryResults(BulkQueryRequest bulkQueryRequest, int initialRecordCount) {
-        AtomicReference<String> sforceLocator = new AtomicReference<>("");
-        AtomicReference<Boolean> downloading = new AtomicReference<>(true);
-        AtomicReference<Integer> sforceNumberOfRecords = new AtomicReference<>(-1);
-        int totalRecords = initialRecordCount;
-        boolean isQueryAll = "queryAll".equals(bulkQueryRequest.operation);
-        String objectName = bulkQueryRequest.object;
-
-        BackupBatchResult result = new BackupBatchResult();
-        result.totalRecords = initialRecordCount;
-
-        // Base file path (first file without locator suffix)
-        Path baseFilePath = Paths.get("/tmp/" + bulkQueryRequest.id + ".csv");
-        boolean isFirstFile = true;
-        List<Path> tempFilesToDelete = new ArrayList<>();
-
-        while(downloading.get()) {
-            String sforceLocatorString = !sforceLocator.get().isEmpty() ? "&locator=" + sforceLocator.get() : "";
-            Flux<DataBuffer> dataBufferFlux = webClient
-                    .get()
-                    .uri(String.format("/services/data/%s/jobs/query/%s/results?maxRecords=%d%s",
-                                salesforceCredentials.getApiVersion(),
-                                bulkQueryRequest.id,
-                                MAX_RECORDS,
-                                sforceLocatorString))
-                            .headers(httpHeaders ->
-                                    httpHeaders.setBearerAuth(this.salesforceAccessToken.accessToken)
-                            )
-                            .accept(MediaType.APPLICATION_JSON)
-                            .exchangeToFlux(response -> {
-                                if (response.statusCode().equals(HttpStatus.OK)) {
-                                    final String headerSforceLocator = response.headers().header("Sforce-Locator").get(0);
-                                    if (headerSforceLocator.equals("null")) {
-                                        downloading.set(false);
-                                    } else {
-                                        sforceLocator.set(headerSforceLocator);
-                                    }
-                                    // Capture Sforce-NumberOfRecords header for validation (case-insensitive)
-                                    String numRecordsValue = null;
-                                    for (String headerName : List.of("Sforce-NumberOfRecords", "sforce-numberofrecords", "SFORCE-NUMBEROFRECORDS")) {
-                                        List<String> headerValues = response.headers().header(headerName);
-                                        if (!headerValues.isEmpty()) {
-                                            numRecordsValue = headerValues.get(0);
-                                            break;
-                                        }
-                                    }
-                                    if (numRecordsValue != null) {
-                                        try {
-                                            sforceNumberOfRecords.set(Integer.parseInt(numRecordsValue));
-                                        } catch (NumberFormatException e) {
-                                            log.warn("Failed to parse Sforce-NumberOfRecords header: {}", numRecordsValue);
-                                        }
-                                    }
-                                    // Update API limit tracker from response header
-                                    apiLimitTracker.ifPresent(tracker -> {
-                                        List<String> limitHeader = response.headers().header("Sforce-Limit-Info");
-                                        if (!limitHeader.isEmpty()) {
-                                            tracker.updateFromHeader(limitHeader.get(0));
-                                        }
-                                    });
-                                    return response.bodyToFlux(DataBuffer.class);
-                                } else {
-                                    log.error(response.createException().toString());
-                                    throw new RuntimeException();
-                                }
-                            });
-
-            Path currentFilePath;
-            if (isFirstFile) {
-                currentFilePath = baseFilePath;
-                isFirstFile = false;
-            } else {
-                currentFilePath = Paths.get("/tmp/" + bulkQueryRequest.id + ".csv." + sforceLocator.get());
-                tempFilesToDelete.add(currentFilePath);
-            }
-
-            log.info("Writing to {}", currentFilePath);
-            DataBufferUtils.write(dataBufferFlux, currentFilePath, StandardOpenOption.CREATE).block();
-
-            // Concatenate subsequent files to base file (skip header)
-            if (!currentFilePath.equals(baseFilePath)) {
-                try {
-                    log.info("Concatenating {} to {}", currentFilePath, baseFilePath);
-                    concatenateCsvFiles(baseFilePath, currentFilePath);
-                } catch (IOException e) {
-                    log.error("Failed to concatenate CSV files: {}", e.getMessage(), e);
-                    throw new RuntimeException("CSV concatenation failed", e);
-                }
-            }
-
-            // Extract checkpoint info from last row and validate CSV integrity
-            CsvLastRow lastRowInfo = extractLastRowInfo(currentFilePath, isQueryAll);
-
-            // VALIDATION 1: Check that CSV parsing succeeded and Id was valid
-            if (!lastRowInfo.valid) {
-                throw new CsvValidationException(String.format(
-                    "CSV validation failed for %s: %s", objectName, lastRowInfo.validationError));
-            }
-
-            // VALIDATION 2: Check that row count matches Sforce-NumberOfRecords header
-            int expectedRecords = sforceNumberOfRecords.get();
-            if (expectedRecords >= 0 && lastRowInfo.rowCount != expectedRecords) {
-                throw new CsvValidationException(String.format(
-                    "CSV record count mismatch for %s: expected %d (from Sforce-NumberOfRecords header), got %d. File may be truncated.",
-                    objectName, expectedRecords, lastRowInfo.rowCount));
-            }
-
-            totalRecords += lastRowInfo.rowCount;
-            log.debug("CSV validated: {} records match Sforce-NumberOfRecords header", lastRowInfo.rowCount);
-
-            if (lastRowInfo.lastId != null) {
-                result.lastId = lastRowInfo.lastId;
-                result.lastModstamp = lastRowInfo.lastSystemModstamp != null
-                    ? new java.sql.Timestamp(lastRowInfo.lastSystemModstamp.getTime())
-                    : null;
-                log.info("Downloaded {} records, lastId={}, lastModstamp={}",
-                        totalRecords, lastRowInfo.lastId, lastRowInfo.lastSystemModstamp);
-            }
-
-            // Reset for next chunk
-            sforceNumberOfRecords.set(-1);
-        }
-
-        // Update result counts
-        if (isQueryAll) {
-            result.deletedRecords = totalRecords;
-        } else {
-            result.totalRecords = totalRecords;
-        }
-        result.csvPath = baseFilePath;
-
-        // After loop: Upload consolidated CSV to S3 and process into PostgreSQL
-        if (totalRecords > 0 && Files.exists(baseFilePath)) {
-            try {
-                String s3Key = s3Service.uploadCsvToS3(baseFilePath, objectName, isQueryAll);
-                log.info("Uploaded consolidated CSV to S3: {}", s3Key);
-
-                Set<String> refFields = getReferenceFields(objectName);
-                int insertedRecords = postgresService.processCsvToPostgres(baseFilePath, objectName, s3Key, isQueryAll, refFields);
-                log.info("Inserted {} records into PostgreSQL for {}", insertedRecords, objectName);
-
-                // For ContentVersion: Download files (handled separately now)
-                if ("ContentVersion".equals(objectName) && !isQueryAll) {
-                    log.info("Processing ContentVersion files...");
-                    downloadContentVersionFiles(baseFilePath, objectName);
-                }
-
-            } catch (IOException | SQLException e) {
-                log.error("Failed to process consolidated CSV for {}: {}", objectName, e.getMessage(), e);
-            } finally {
-                deleteTempFile(baseFilePath);
-            }
-        } else if (totalRecords == 0 && Files.exists(baseFilePath)) {
-            deleteTempFile(baseFilePath);
-        }
-
-        // Clean up temporary files
-        for (Path tempFile : tempFilesToDelete) {
-            try {
-                if (Files.exists(tempFile)) {
-                    Files.delete(tempFile);
-                    log.debug("Deleted temporary file: {}", tempFile);
-                }
-            } catch (IOException e) {
-                log.warn("Failed to delete temporary file {}: {}", tempFile, e.getMessage());
-            }
-        }
-
-        return result;
-    }
-
     /**
      * Download query results from Bulk API without processing to storage.
-     * This method only downloads and concatenates CSV chunks, extracting checkpoint info.
-     * Use processCsvToStorage() to upload to S3 and insert into PostgreSQL.
-     *
-     * @param bulkQueryRequest The bulk query request
-     * @param initialRecordCount Starting record count (for resuming)
-     * @return CsvDownloadResult with CSV path and checkpoint info
+     * Delegates to {@link BulkQueryResultDownloader}; use processCsvToStorage() to upload to S3 and insert into PostgreSQL.
      */
     public CsvDownloadResult downloadBulkQueryCsv(BulkQueryRequest bulkQueryRequest, int initialRecordCount) {
-        AtomicReference<String> sforceLocator = new AtomicReference<>("");
-        AtomicReference<Boolean> downloading = new AtomicReference<>(true);
-        AtomicReference<Integer> sforceNumberOfRecords = new AtomicReference<>(-1);
-        int totalRecords = initialRecordCount;
-        boolean isQueryAll = "queryAll".equals(bulkQueryRequest.operation);
-        String objectName = bulkQueryRequest.object;
-
-        CsvDownloadResult result = new CsvDownloadResult();
-        result.objectName = objectName;
-        result.isQueryAll = isQueryAll;
-        result.recordCount = 0;
-
-        // Base file path (first file without locator suffix)
-        Path baseFilePath = Paths.get("/tmp/" + bulkQueryRequest.id + ".csv");
-        boolean isFirstFile = true;
-        List<Path> tempFilesToDelete = new ArrayList<>();
-
-        while(downloading.get()) {
-            String sforceLocatorString = !sforceLocator.get().isEmpty() ? "&locator=" + sforceLocator.get() : "";
-            String currentLocator = sforceLocator.get(); // Save for retry
-
-            // Retry loop for chunk download and validation
-            CsvLastRow lastRowInfo = null;
-            Path currentFilePath = null;
-            for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
-                try {
-                    Flux<DataBuffer> dataBufferFlux = webClient
-                            .get()
-                            .uri(String.format("/services/data/%s/jobs/query/%s/results?maxRecords=%d%s",
-                                        salesforceCredentials.getApiVersion(),
-                                        bulkQueryRequest.id,
-                                        MAX_RECORDS,
-                                        sforceLocatorString))
-                                    .headers(httpHeaders ->
-                                            httpHeaders.setBearerAuth(this.salesforceAccessToken.accessToken)
-                                    )
-                                    .accept(MediaType.APPLICATION_JSON)
-                                    .exchangeToFlux(response -> {
-                                        if (response.statusCode().equals(HttpStatus.OK)) {
-                                            final String headerSforceLocator = response.headers().header("Sforce-Locator").get(0);
-                                            if (headerSforceLocator.equals("null")) {
-                                                downloading.set(false);
-                                            } else {
-                                                sforceLocator.set(headerSforceLocator);
-                                            }
-                                            // Capture Sforce-NumberOfRecords header for validation
-                                            // Note: Header name case changed with Hyperforce migration, so we check multiple variants
-                                            String numRecordsValue = null;
-                                            for (String headerName : List.of("Sforce-NumberOfRecords", "sforce-numberofrecords", "SFORCE-NUMBEROFRECORDS")) {
-                                                List<String> headerValues = response.headers().header(headerName);
-                                                if (!headerValues.isEmpty()) {
-                                                    numRecordsValue = headerValues.get(0);
-                                                    break;
-                                                }
-                                            }
-                                            if (numRecordsValue != null) {
-                                                try {
-                                                    sforceNumberOfRecords.set(Integer.parseInt(numRecordsValue));
-                                                } catch (NumberFormatException e) {
-                                                    log.warn("Failed to parse Sforce-NumberOfRecords header: {}", numRecordsValue);
-                                                }
-                                            }
-                                            // Update API limit tracker from response header
-                                            apiLimitTracker.ifPresent(tracker -> {
-                                                List<String> limitHeader = response.headers().header("Sforce-Limit-Info");
-                                                if (!limitHeader.isEmpty()) {
-                                                    tracker.updateFromHeader(limitHeader.get(0));
-                                                }
-                                            });
-                                            return response.bodyToFlux(DataBuffer.class);
-                                        } else {
-                                            log.error(response.createException().toString());
-                                            throw new RuntimeException();
-                                        }
-                                    });
-
-                    if (isFirstFile) {
-                        currentFilePath = baseFilePath;
-                        isFirstFile = false;
-                    } else {
-                        currentFilePath = Paths.get("/tmp/" + bulkQueryRequest.id + ".csv." + sforceLocator.get());
-                        tempFilesToDelete.add(currentFilePath);
-                    }
-
-                    log.info("Writing to {}", currentFilePath);
-                    DataBufferUtils.write(dataBufferFlux, currentFilePath, StandardOpenOption.CREATE).block();
-
-                    // Concatenate subsequent files to base file (skip header)
-                    if (!currentFilePath.equals(baseFilePath)) {
-                        log.info("Concatenating {} to {}", currentFilePath, baseFilePath);
-                        concatenateCsvFiles(baseFilePath, currentFilePath);
-                    }
-
-                    // Extract checkpoint info from last row and validate CSV integrity
-                    lastRowInfo = extractLastRowInfo(currentFilePath, isQueryAll);
-
-                    // VALIDATION 1: Check that CSV parsing succeeded and Id was valid
-                    if (!lastRowInfo.valid) {
-                        throw new CsvValidationException(String.format(
-                            "CSV validation failed for %s: %s", objectName, lastRowInfo.validationError));
-                    }
-
-                    // VALIDATION 2: Check that row count matches Sforce-NumberOfRecords header
-                    int expectedRecords = sforceNumberOfRecords.get();
-                    if (expectedRecords >= 0 && lastRowInfo.rowCount != expectedRecords) {
-                        throw new CsvValidationException(String.format(
-                            "CSV record count mismatch for %s: expected %d (from Sforce-NumberOfRecords header), got %d. File may be truncated.",
-                            objectName, expectedRecords, lastRowInfo.rowCount));
-                    }
-
-                    log.debug("CSV validated: {} records match Sforce-NumberOfRecords header", lastRowInfo.rowCount);
-                    break; // Success - exit retry loop
-
-                } catch (CsvValidationException e) {
-                    if (attempt == MAX_RETRY_ATTEMPTS) {
-                        log.error("CSV validation failed after {} attempts for {}: {}", MAX_RETRY_ATTEMPTS, objectName, e.getMessage());
-                        throw e;
-                    }
-                    log.warn("CSV validation failed for {} (attempt {}/{}), retrying in 5 seconds: {}",
-                        objectName, attempt, MAX_RETRY_ATTEMPTS, e.getMessage());
-                    // Reset locator to retry same chunk
-                    sforceLocator.set(currentLocator);
-                    sforceNumberOfRecords.set(-1);
-                    // Delete potentially corrupt file before retry
-                    if (currentFilePath != null && Files.exists(currentFilePath)) {
-                        try { Files.delete(currentFilePath); } catch (IOException ignored) {}
-                    }
-                    try { Thread.sleep(5000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                } catch (IOException e) {
-                    log.error("Failed to concatenate CSV files: {}", e.getMessage(), e);
-                    throw new RuntimeException("CSV concatenation failed", e);
-                }
-            }
-
-            totalRecords += lastRowInfo.rowCount;
-
-            if (lastRowInfo.lastId != null) {
-                result.lastId = lastRowInfo.lastId;
-                result.lastModstamp = lastRowInfo.lastSystemModstamp != null
-                    ? new java.sql.Timestamp(lastRowInfo.lastSystemModstamp.getTime())
-                    : null;
-                log.info("Downloaded {} records, lastId={}, lastModstamp={}",
-                        totalRecords, lastRowInfo.lastId, lastRowInfo.lastSystemModstamp);
-            }
-
-            // Reset for next chunk
-            sforceNumberOfRecords.set(-1);
-        }
-
-        // Clean up temporary files
-        for (Path tempFile : tempFilesToDelete) {
-            try {
-                if (Files.exists(tempFile)) {
-                    Files.delete(tempFile);
-                    log.debug("Deleted temporary file: {}", tempFile);
-                }
-            } catch (IOException e) {
-                log.warn("Failed to delete temporary file {}: {}", tempFile, e.getMessage());
-            }
-        }
-
-        // Set result fields
-        result.csvPath = baseFilePath;
-        result.recordCount = totalRecords - initialRecordCount;  // Records in THIS batch
-        // hasMoreRecords is true if we got a full batch
-        int batchSize = getBatchSize(objectName);
-        result.hasMoreRecords = result.recordCount >= batchSize;
-
-        return result;
+        return resultDownloader.download(bulkQueryRequest, initialRecordCount);
     }
 
     /**
@@ -1421,7 +837,8 @@ public class SalesforceService {
                 }
 
             } catch (IOException | SQLException e) {
-                log.error("Failed to process consolidated CSV for {}: {}", objectName, e.getMessage(), e);
+                // Propagate so the caller never advances the checkpoint past records that were not stored
+                throw new RuntimeException("Failed to store batch for " + objectName + ": " + e.getMessage(), e);
             } finally {
                 deleteTempFile(csvPath);
             }
@@ -1449,39 +866,12 @@ public class SalesforceService {
                 int insertedRecords = postgresService.processCsvToPostgres(csvPath, objectName, s3Key, false, archivePeriodInt, refFields);
                 log.info("Inserted {} archive records into PostgreSQL for {}", insertedRecords, objectName);
             } catch (IOException | SQLException e) {
-                log.error("Failed to process archive CSV for {}: {}", objectName, e.getMessage(), e);
+                throw new RuntimeException("Failed to store archive batch for " + objectName + ": " + e.getMessage(), e);
             } finally {
                 deleteTempFile(csvPath);
             }
         } else if (recordCount == 0 && Files.exists(csvPath)) {
             deleteTempFile(csvPath);
-        }
-    }
-
-    /**
-     * Concatenate CSV file by appending rows from source to destination (skipping header)
-     */
-    private void concatenateCsvFiles(Path destination, Path source) throws IOException {
-        try (var reader = Files.newBufferedReader(source);
-             var writer = Files.newBufferedWriter(destination, StandardOpenOption.APPEND)) {
-
-            // Skip header line from source file
-            String headerLine = reader.readLine();
-            if (headerLine == null) {
-                log.warn("Source file {} is empty, skipping concatenation", source);
-                return;
-            }
-
-            // Append all data rows to destination
-            String line;
-            int lineCount = 0;
-            while ((line = reader.readLine()) != null) {
-                writer.write(line);
-                writer.newLine();
-                lineCount++;
-            }
-
-            log.debug("Concatenated {} lines from {} to {}", lineCount, source, destination);
         }
     }
 
@@ -1770,7 +1160,7 @@ public class SalesforceService {
                 return records;
             }
 
-            String[] headers = parseCsvLineSimple(headerLine);
+            String[] headers = BulkQueryResultDownloader.parseCsvLineSimple(headerLine);
 
             // Find required column indices
             int idIndex = findColumnIndex(headers, "Id");
@@ -1795,7 +1185,7 @@ public class SalesforceService {
                     continue;
                 }
 
-                String[] values = parseCsvLineSimple(line);
+                String[] values = BulkQueryResultDownloader.parseCsvLineSimple(line);
                 if (values.length != headers.length) {
                     log.warn("Skipping malformed line (expected {} columns, got {})", headers.length, values.length);
                     continue;

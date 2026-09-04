@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -301,7 +302,41 @@ class PostgresServiceIntegrationTest extends PostgresTestBase {
         assertTrue(checksums.contains("abc123def456.pdf"));
     }
 
+    // ===== Stale run reconciliation =====
+
+    @Test
+    void stale_running_rows_are_abandoned_for_this_org_only() throws SQLException {
+        long stale = service.createBackupRun("Account", false);
+        long finished = service.createBackupRun("Contact", false);
+        service.completeBackupRun(finished, "SUCCESS", 5, 0, 0, null);
+        try (Connection conn = DriverManager.getConnection(getJdbcUrl(), getUsername(), getPassword());
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("INSERT INTO backup_runs (object_name, org_id, period, status) " +
+                         "VALUES ('Account', '00D000000000999', 2601, 'RUNNING')");
+        }
+
+        List<String> abandoned = service.abandonStaleRuns();
+
+        assertEquals(1, abandoned.size());
+        assertTrue(abandoned.get(0).startsWith("Account (period "), abandoned.get(0));
+        assertEquals("ABANDONED", queryString("SELECT status FROM backup_runs WHERE run_id = " + stale));
+        assertNotNull(queryString("SELECT completed_at FROM backup_runs WHERE run_id = " + stale));
+        assertEquals("SUCCESS", queryString("SELECT status FROM backup_runs WHERE run_id = " + finished));
+        assertEquals("RUNNING", queryString("SELECT status FROM backup_runs WHERE org_id = '00D000000000999'"));
+
+        // Idempotent: nothing left to abandon
+        assertTrue(service.abandonStaleRuns().isEmpty());
+    }
+
     // ===== Helper =====
+
+    private String queryString(String sql) throws SQLException {
+        try (Connection conn = DriverManager.getConnection(getJdbcUrl(), getUsername(), getPassword());
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            return rs.next() ? rs.getString(1) : null;
+        }
+    }
 
     private Path createTempCsv(String content) throws IOException {
         Path tempFile = Files.createTempFile("test-csv-", ".csv");

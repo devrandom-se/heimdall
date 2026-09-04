@@ -29,8 +29,10 @@ import org.springframework.stereotype.Component;
 import se.devrandom.heimdall.salesforce.ApiLimitTracker;
 import se.devrandom.heimdall.salesforce.SalesforceService;
 import se.devrandom.heimdall.storage.BackupStatisticsService;
+import se.devrandom.heimdall.storage.PostgresService;
 import se.devrandom.heimdall.storage.RdsLifecycleService;
 
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -42,9 +44,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 public class JobCompletionNotificationListener implements JobExecutionListener {
     private static final Logger log = LoggerFactory.getLogger(JobCompletionNotificationListener.class);
 
+    /** Exit code for a job that ran to completion but with at least one object failed, partial or skipped. */
+    static final int EXIT_COMPLETED_WITH_ERRORS = 2;
+
     private final SalesforceService salesforceService;
     private final ApplicationContext applicationContext;
     private final BackupStatisticsService statisticsService;
+    private final PostgresService postgresService;
     private final Environment environment;
     private final Optional<RdsLifecycleService> rdsLifecycleService;
     private final Optional<ApiLimitTracker> apiLimitTracker;
@@ -52,12 +58,14 @@ public class JobCompletionNotificationListener implements JobExecutionListener {
     public JobCompletionNotificationListener(SalesforceService salesforceService,
                                             ApplicationContext applicationContext,
                                             BackupStatisticsService statisticsService,
+                                            PostgresService postgresService,
                                             Environment environment,
                                             Optional<RdsLifecycleService> rdsLifecycleService,
                                             Optional<ApiLimitTracker> apiLimitTracker) {
         this.salesforceService = salesforceService;
         this.applicationContext = applicationContext;
         this.statisticsService = statisticsService;
+        this.postgresService = postgresService;
         this.environment = environment;
         this.rdsLifecycleService = rdsLifecycleService;
         this.apiLimitTracker = apiLimitTracker;
@@ -70,6 +78,15 @@ public class JobCompletionNotificationListener implements JobExecutionListener {
     @Override
     public void beforeJob(JobExecution jobExecution) {
         log.info("Starting job");
+        try {
+            List<String> abandoned = postgresService.abandonStaleRuns();
+            if (!abandoned.isEmpty()) {
+                log.warn("Marked {} stale RUNNING backup run(s) from an earlier job as ABANDONED: {}",
+                        abandoned.size(), abandoned);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not reconcile stale backup runs", e);
+        }
     }
 
     private void flushPendingUpserts() {
@@ -83,93 +100,75 @@ public class JobCompletionNotificationListener implements JobExecutionListener {
         }
     }
 
+    /**
+     * 0 = clean run; 1 = the batch job itself failed or stopped; 2 = the job completed but at least one
+     * object failed, stopped early, or was skipped because the API limit was reached.
+     */
+    static int exitCodeFor(BatchStatus status, boolean anyObjectFailed, boolean apiLimitReached) {
+        if (status != BatchStatus.COMPLETED) {
+            return 1;
+        }
+        return (anyObjectFailed || apiLimitReached) ? EXIT_COMPLETED_WITH_ERRORS : 0;
+    }
+
     @Override
     public void afterJob(JobExecution jobExecution) {
-        if(jobExecution.getStatus() == BatchStatus.COMPLETED) {
-            log.info("!!! JOB FINISHED! Time to verify the results");
+        BatchStatus status = jobExecution.getStatus();
+        boolean apiLimitReached = apiLimitTracker.map(ApiLimitTracker::isLimitReached).orElse(false);
+        int exitCode = exitCodeFor(status, !statisticsService.getFailedObjects().isEmpty(), apiLimitReached);
 
+        if (status == BatchStatus.COMPLETED) {
+            log.info("!!! JOB FINISHED! Time to verify the results");
             // Flush all pending Heimdall_Backup_Config__c upserts
             flushPendingUpserts();
-
-            // Mark job as complete in statistics and generate summary report
-            statisticsService.markJobComplete();
-            String summary = statisticsService.generateSummaryReport();
-
-            // Print comprehensive statistics summary
-            log.info("\n" + "=".repeat(80));
-            log.info("BACKUP JOB SUMMARY");
-            log.info("=".repeat(80));
-            log.info(summary);
-            apiLimitTracker.ifPresent(tracker -> {
-                tracker.logCurrentUsage();
-                if (tracker.isLimitReached()) {
-                    log.warn("API LIMIT WAS REACHED during this run - some objects may have been skipped");
-                }
-            });
-            log.info("=".repeat(80));
-
-            // In web mode, don't exit - keep the web server running
-            if (isWebMode()) {
-                log.info("Web mode active - keeping server running for restore GUI");
-            } else {
-                // Schedule shutdown after Spring Batch has finished updating job metadata
-                new Thread(() -> {
-                    try {
-                        Thread.sleep(1000); // Wait for Spring Batch to finish updating metadata
-                        try {
-                            rdsLifecycleService.ifPresent(RdsLifecycleService::stopIfWeStarted);
-                        } catch (Exception e) {
-                            log.warn("Failed to stop RDS: {}", e.getMessage());
-                        }
-                        log.info("Shutting down application...");
-                        int exitCode = SpringApplication.exit(applicationContext, () -> 0);
-                        System.exit(exitCode);
-                    } catch (InterruptedException e) {
-                        log.error("Shutdown interrupted", e);
-                    }
-                }).start();
-            }
-        } else if(jobExecution.getStatus() == BatchStatus.FAILED) {
+        } else if (status == BatchStatus.FAILED) {
             log.error("!!! JOB FAILED! Check logs for errors");
-
-            // Mark job as complete (even for failed jobs) and generate summary
-            statisticsService.markJobComplete();
-            String summary = statisticsService.generateSummaryReport();
-
-            // Print summary even for failed jobs
-            log.info("\n" + "=".repeat(80));
-            log.info("BACKUP JOB SUMMARY (FAILED)");
-            log.info("=".repeat(80));
-            log.info(summary);
-            apiLimitTracker.ifPresent(tracker -> {
-                tracker.logCurrentUsage();
-                if (tracker.isLimitReached()) {
-                    log.warn("API LIMIT WAS REACHED during this run - some objects may have been skipped");
-                }
-            });
-            log.info("=".repeat(80));
-
-            // In web mode, don't exit - keep the web server running
-            if (isWebMode()) {
-                log.info("Web mode active - keeping server running for restore GUI despite job failure");
-            } else {
-                // Schedule shutdown with error code
-                new Thread(() -> {
-                    try {
-                        Thread.sleep(1000); // Wait for Spring Batch to finish updating metadata
-                        try {
-                            rdsLifecycleService.ifPresent(RdsLifecycleService::stopIfWeStarted);
-                        } catch (Exception e) {
-                            log.warn("Failed to stop RDS: {}", e.getMessage());
-                        }
-                        log.info("Shutting down application with error status...");
-                        int exitCode = SpringApplication.exit(applicationContext, () -> 1);
-                        System.exit(exitCode);
-                    } catch (InterruptedException e) {
-                        log.error("Shutdown interrupted", e);
-                    }
-                }).start();
-            }
+        } else {
+            log.error("!!! JOB ENDED WITH STATUS {} - treating it as a failure", status);
         }
+
+        // Mark job as complete (even for failed jobs) and generate summary report
+        statisticsService.markJobComplete();
+        String summary = statisticsService.generateSummaryReport();
+
+        log.info("\n" + "=".repeat(80));
+        log.info(status == BatchStatus.COMPLETED ? "BACKUP JOB SUMMARY" : "BACKUP JOB SUMMARY (" + status + ")");
+        log.info("=".repeat(80));
+        log.info(summary);
+        apiLimitTracker.ifPresent(tracker -> {
+            tracker.logCurrentUsage();
+            if (tracker.isLimitReached()) {
+                log.warn("API LIMIT WAS REACHED during this run - some objects may have been skipped");
+            }
+        });
+        if (exitCode == EXIT_COMPLETED_WITH_ERRORS) {
+            log.warn("Job completed with errors - exiting with code {}", EXIT_COMPLETED_WITH_ERRORS);
+        }
+        log.info("=".repeat(80));
+
+        // In web mode, don't exit - keep the web server running
+        if (isWebMode()) {
+            log.info("Web mode active - keeping server running for restore GUI");
+        } else {
+            shutdown(exitCode);
+        }
+    }
+
+    /** Schedule shutdown after Spring Batch has finished updating job metadata. */
+    private void shutdown(int exitCode) {
+        new Thread(() -> {
+            try {
+                Thread.sleep(1000); // Wait for Spring Batch to finish updating metadata
+                try {
+                    rdsLifecycleService.ifPresent(RdsLifecycleService::stopIfWeStarted);
+                } catch (Exception e) {
+                    log.warn("Failed to stop RDS: {}", e.getMessage());
+                }
+                log.info("Shutting down application with exit code {}...", exitCode);
+                System.exit(SpringApplication.exit(applicationContext, () -> exitCode));
+            } catch (InterruptedException e) {
+                log.error("Shutdown interrupted", e);
+            }
+        }).start();
     }
 }

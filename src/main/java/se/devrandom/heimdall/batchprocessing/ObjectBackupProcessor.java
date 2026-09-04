@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.item.ItemProcessor;
 import org.springframework.beans.factory.annotation.Autowired;
+import se.devrandom.heimdall.salesforce.CsvDownloadResult;
 import se.devrandom.heimdall.salesforce.SalesforceService;
 import se.devrandom.heimdall.salesforce.objects.*;
 import se.devrandom.heimdall.storage.BackupStatisticsService;
@@ -30,13 +31,12 @@ import se.devrandom.heimdall.salesforce.ApiLimitTracker;
 
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.TimeZone;
 import java.util.concurrent.CompletableFuture;
 
 public class ObjectBackupProcessor
@@ -47,10 +47,10 @@ public class ObjectBackupProcessor
      * Contains the download result and optionally a future for the next Bulk Query.
      */
     private static class BatchPipelineResult {
-        final SalesforceService.CsvDownloadResult download;
+        final CsvDownloadResult download;
         final CompletableFuture<BulkQueryRequest> nextQueryFuture;
 
-        BatchPipelineResult(SalesforceService.CsvDownloadResult download,
+        BatchPipelineResult(CsvDownloadResult download,
                            CompletableFuture<BulkQueryRequest> nextQueryFuture) {
             this.download = download;
             this.nextQueryFuture = nextQueryFuture;
@@ -68,11 +68,12 @@ public class ObjectBackupProcessor
 
     private static final Logger log = LoggerFactory.getLogger(ObjectBackupProcessor.class);
 
-    // Format for SOQL datetime literals
-    private static final SimpleDateFormat SOQL_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
-    static {
-        SOQL_DATE_FORMAT.setTimeZone(TimeZone.getTimeZone("UTC"));
-    }
+    // Format for SOQL datetime literals. DateTimeFormatter is immutable and thread-safe (the step runs 4 threads).
+    private static final DateTimeFormatter SOQL_DATE_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
+
+    /** Wait after submitting a Bulk API query before polling it. Overridden to 0 in tests. */
+    private long bulkQueryWarmupMs = 10_000L;
 
     /**
      * Format a timestamp for SOQL WHERE clause
@@ -81,7 +82,7 @@ public class ObjectBackupProcessor
         if (timestamp == null) {
             return "1970-01-01T00:00:00.000Z";
         }
-        return SOQL_DATE_FORMAT.format(timestamp);
+        return SOQL_DATE_FORMAT.format(timestamp.toInstant());
     }
 
     /**
@@ -129,7 +130,7 @@ public class ObjectBackupProcessor
             bulkQueryRequest = salesforceService.createBulkQuery(item, queryAll, lastModstamp, lastId);
 
             try {
-                Thread.sleep(10 * 1000);
+                Thread.sleep(bulkQueryWarmupMs);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
@@ -151,7 +152,7 @@ public class ObjectBackupProcessor
         // Download CSV (without processing to storage yet) - with timing for batch size optimization
         int batchSize = salesforceService.getBatchSize(item.name);
         long downloadStartTime = System.currentTimeMillis();
-        SalesforceService.CsvDownloadResult download = salesforceService.downloadBulkQueryCsv(bulkQueryStatus, initialRecordCount);
+        CsvDownloadResult download = salesforceService.downloadBulkQueryCsv(bulkQueryStatus, initialRecordCount);
         long downloadDurationSeconds = (System.currentTimeMillis() - downloadStartTime) / 1000;
 
         // Log batch timing
@@ -175,7 +176,7 @@ public class ObjectBackupProcessor
                     BulkQueryRequest nextQuery = salesforceService.createBulkQuery(
                             item, queryAll, nextLastModstamp, nextLastId);
                     // Wait 10s for Salesforce to process
-                    Thread.sleep(10 * 1000);
+                    Thread.sleep(bulkQueryWarmupMs);
                     return nextQuery;
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -254,7 +255,8 @@ public class ObjectBackupProcessor
         try {
             return processObject(backup, objectName, doBackup, doArchive);
         } catch (Exception e) {
-            log.error("Processing FAILED for {} - skipping and continuing with next object: {}", objectName, e.getMessage());
+            log.error("Processing FAILED for {} - skipping and continuing with next object: {}", objectName, e.getMessage(), e);
+            statisticsService.recordObjectFailure(objectName, e.getMessage());
             return null;
         }
     }
@@ -392,9 +394,13 @@ public class ObjectBackupProcessor
 
         // PHASE 1: Fetch all active records first (with pipeline optimization)
         log.info("Starting PHASE 1: Fetching active records for {} (pipeline-optimized)", objectName);
+        String runStatus = "SUCCESS";
+        String runError = null;
         while (true) {
             // Check API limit before each batch
             if (tracker.isPresent() && tracker.get().isLimitReached()) {
+                runStatus = "PARTIAL";
+                runError = "API limit reached after " + batchCounter + " batches";
                 log.warn("API limit reached - stopping active records fetch for {} after {} batches", objectName, batchCounter);
                 break;
             }
@@ -402,12 +408,22 @@ public class ObjectBackupProcessor
             batchCounter++;
             log.info("Starting active records batch {} for {}", batchCounter, objectName);
 
-            // Use pipelined method - pass the pre-started query future if available
-            BatchPipelineResult pipelineResult = downloadOneBatchPipelined(
-                    describe, false, currentLastModstamp, currentLastId, totalRecords, nextQueryFuture);
+            // Use pipelined method - pass the pre-started query future if available.
+            // A storage failure throws here, before the checkpoint below is written, so the batch is re-fetched next run.
+            BatchPipelineResult pipelineResult;
+            try {
+                pipelineResult = downloadOneBatchPipelined(
+                        describe, false, currentLastModstamp, currentLastId, totalRecords, nextQueryFuture);
+            } catch (RuntimeException e) {
+                completeRun(runId, "FAILED", totalRecords, e.getMessage());
+                throw e;
+            }
 
             if (pipelineResult.download == null) {
+                runStatus = "FAILED";
+                runError = "Bulk query failed at batch " + batchCounter;
                 log.error("Batch {} failed for {}", batchCounter, objectName);
+                statisticsService.recordObjectFailure(objectName, runError);
                 break;
             }
 
@@ -447,14 +463,8 @@ public class ObjectBackupProcessor
             }
         }
 
-        // Complete active records run (skip for ContentVersion - it manages its own run)
-        if (!"ContentVersion".equals(objectName)) {
-            try {
-                postgresService.completeBackupRun(runId, "SUCCESS", totalRecords, 0, 0, null);
-            } catch (SQLException e) {
-                log.warn("Failed to complete backup run: {}", e.getMessage());
-            }
-        }
+        // Complete active records run (ContentVersion manages its own run; its runId is -1 and skipped)
+        completeRun(runId, runStatus, totalRecords, runError);
 
         // PHASE 2: Fetch deleted records (with pipeline optimization)
         if (describe.hasIsDeletedField()) {
@@ -475,9 +485,13 @@ public class ObjectBackupProcessor
             // Pipeline state for deleted records
             CompletableFuture<BulkQueryRequest> nextDeletedQueryFuture = null;
 
+            String deletedRunStatus = "SUCCESS";
+            String deletedRunError = null;
             while (true) {
                 // Check API limit before each batch
                 if (tracker.isPresent() && tracker.get().isLimitReached()) {
+                    deletedRunStatus = "PARTIAL";
+                    deletedRunError = "API limit reached after " + deletedBatchCounter + " batches";
                     log.warn("API limit reached - stopping deleted records fetch for {} after {} batches", objectName, deletedBatchCounter);
                     break;
                 }
@@ -486,11 +500,20 @@ public class ObjectBackupProcessor
                 log.info("Starting deleted records batch {} for {}", deletedBatchCounter, objectName);
 
                 // Use pipelined method for deleted records too
-                BatchPipelineResult pipelineResult = downloadOneBatchPipelined(
-                        describe, true, currentDeletedModstamp, currentDeletedId, totalDeletedRecords, nextDeletedQueryFuture);
+                BatchPipelineResult pipelineResult;
+                try {
+                    pipelineResult = downloadOneBatchPipelined(
+                            describe, true, currentDeletedModstamp, currentDeletedId, totalDeletedRecords, nextDeletedQueryFuture);
+                } catch (RuntimeException e) {
+                    completeRun(deletedRunId, "FAILED", totalDeletedRecords, e.getMessage());
+                    throw e;
+                }
 
                 if (pipelineResult.download == null) {
+                    deletedRunStatus = "FAILED";
+                    deletedRunError = "Bulk query (deleted records) failed at batch " + deletedBatchCounter;
                     log.error("Deleted batch {} failed for {}", deletedBatchCounter, objectName);
+                    statisticsService.recordObjectFailure(objectName, deletedRunError);
                     break;
                 }
 
@@ -528,13 +551,7 @@ public class ObjectBackupProcessor
                 }
             }
 
-            if (deletedRunId > 0) {
-                try {
-                    postgresService.completeBackupRun(deletedRunId, "SUCCESS", totalDeletedRecords, 0, 0, null);
-                } catch (SQLException e) {
-                    log.warn("Failed to complete deleted backup run: {}", e.getMessage());
-                }
-            }
+            completeRun(deletedRunId, deletedRunStatus, totalDeletedRecords, deletedRunError);
         }
 
         // Calculate total
@@ -553,6 +570,21 @@ public class ObjectBackupProcessor
         int cpus = rt.availableProcessors();
         log.info("Resource usage: heap {} MB / {} MB ({}%), CPUs: {}",
                 usedMb, maxMb, maxMb > 0 ? usedMb * 100 / maxMb : 0, cpus);
+    }
+
+    /**
+     * Complete a backup run, logging instead of throwing when the bookkeeping itself fails.
+     * Skipped for runs that were never created (runId <= 0, e.g. ContentVersion which tracks its own run).
+     */
+    private void completeRun(long runId, String status, int records, String error) {
+        if (runId <= 0) {
+            return;
+        }
+        try {
+            postgresService.completeBackupRun(runId, status, records, 0, 0, error);
+        } catch (SQLException e) {
+            log.warn("Failed to complete backup run {} with status {}: {}", runId, status, e.getMessage());
+        }
     }
 
     /**
@@ -627,7 +659,7 @@ public class ObjectBackupProcessor
 
                 // Wait for Salesforce to process
                 try {
-                    Thread.sleep(10 * 1000);
+                    Thread.sleep(bulkQueryWarmupMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException(e);
@@ -642,7 +674,7 @@ public class ObjectBackupProcessor
                 }
 
                 // Download CSV
-                SalesforceService.CsvDownloadResult download =
+                CsvDownloadResult download =
                         salesforceService.downloadBulkQueryCsv(bulkQueryStatus, totalArchived);
 
                 if (download == null || download.recordCount == 0) {
@@ -776,7 +808,7 @@ public class ObjectBackupProcessor
                 BulkQueryRequest bulkQueryRequest = salesforceService.createBulkQueryWithSOQL(soql, cdlCheckpointName);
 
                 try {
-                    Thread.sleep(10 * 1000);
+                    Thread.sleep(bulkQueryWarmupMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException(e);
@@ -791,7 +823,7 @@ public class ObjectBackupProcessor
                 }
 
                 // Download CSV
-                SalesforceService.CsvDownloadResult download =
+                CsvDownloadResult download =
                         salesforceService.downloadBulkQueryCsv(bulkQueryStatus, totalArchived);
 
                 if (download == null || download.recordCount == 0) {

@@ -41,6 +41,22 @@ class BackupStatisticsServiceTest {
     }
 
     @Test
+    void failed_objects_are_listed_in_the_summary_and_cleared_by_reset() {
+        stats.recordObjectFailure("Case", "Bulk query failed at batch 3");
+        stats.recordObjectFailure("Account", null);
+
+        assertEquals(2, stats.getFailedObjects().size());
+        String report = stats.generateSummaryReport();
+        assertTrue(report.contains("Objects failed: 2"), report);
+        assertTrue(report.contains("  - Account: unknown error"), report);
+        assertTrue(report.contains("  - Case: Bulk query failed at batch 3"), report);
+
+        stats.reset();
+        assertTrue(stats.getFailedObjects().isEmpty());
+        assertTrue(stats.generateSummaryReport().contains("Objects failed: 0"));
+    }
+
+    @Test
     void addBytesTransferred() {
         stats.addBytesTransferred(1024);
         stats.addBytesTransferred(2048);
