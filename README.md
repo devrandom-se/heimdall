@@ -250,12 +250,52 @@ SALESFORCE_JWT_KEY_FILE=/path/to/private.key
 |----------|---------|-------------|
 | `SALESFORCE_API_VERSION` | `v61.0` | Salesforce API version |
 | `AWS_S3_REGION` | `eu-north-1` | AWS region |
+| `AWS_S3_ENDPOINT` / `AWS_ENDPOINT_URL_S3` | _(AWS default)_ | Custom S3 endpoint URL for S3-compatible storage (MinIO, GCS, etc.) |
 | `POSTGRES_URL` | `jdbc:postgresql://localhost:5432/heimdall` | JDBC URL |
 | `POSTGRES_USERNAME` | `heimdall` | DB username |
 | `HEIMDALL_SKIP_FILES_BELOW_KB` | `0` | Skip small ContentVersion files |
 | `HEIMDALL_METADATA_AUTO_MIGRATE` | `true` | Auto-create SF metadata objects |
 | `RDS_INSTANCE_IDENTIFIER` | _(empty)_ | RDS instance for auto-start/stop |
 | `HEIMDALL_API_LIMIT_STOP_AT_PERCENT` | _(empty)_ | Stop backup at N% of daily API limit |
+
+### S3-Compatible Storage (MinIO, Google Cloud Storage)
+
+Heimdall supports S3-compatible object stores via AWS SDK endpoint overrides (`AWS_S3_ENDPOINT` or `AWS_ENDPOINT_URL_S3`). Previously, this override was silently ignored due to an outdated AWS SDK version, but it is now fully supported.
+
+#### MinIO Example
+
+Point Heimdall at a self-hosted or local MinIO instance:
+
+```bash
+AWS_S3_BUCKET_NAME=your-bucket-name
+AWS_S3_REGION=us-east-1
+AWS_S3_ENDPOINT=https://minio.your-company.com
+AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY
+AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY
+```
+
+#### Google Cloud Storage (GCS) S3 Interoperability
+
+Google Cloud Storage can be used as an S3-compatible backend using Cloud Storage's S3 interoperability XML API:
+
+1. Create a GCP service account with the `Storage Object Admin` (`storage.objectAdmin`) role on your target bucket.
+2. Generate HMAC credentials for the service account:
+   ```bash
+   gcloud storage hmac create your-service-account@your-project.iam.gserviceaccount.com
+   ```
+3. Configure Heimdall with the GCS endpoint, HMAC keys, and required interoperability settings:
+
+```bash
+AWS_S3_BUCKET_NAME=your-bucket-name
+AWS_S3_REGION=auto
+AWS_S3_ENDPOINT=https://storage.googleapis.com
+AWS_ACCESS_KEY_ID=YOUR_HMAC_ACCESS_ID
+AWS_SECRET_ACCESS_KEY=YOUR_HMAC_SECRET
+AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
+AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
+```
+
+> **Note on Checksums:** both `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED` and `AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED` are required because GCS's XML API does not support the AWS SDK's default checksum-trailer / chunked-signing behavior (which causes `SignatureDoesNotMatch` errors without these settings).
 
 ### Restore to Sandbox
 
