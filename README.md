@@ -203,6 +203,10 @@ The stack is designed for minimal cost:
 - **ECS Fargate**: Pay per backup run
 - **Typical total**: $5-15/month for a mid-size org
 
+### Database Migration
+
+The stack creates the database encrypted at rest with storage autoscaling. Stacks created before that, or instances that need to shrink (RDS storage never decreases), are migrated to a new instance with a logical copy; the template supports running both instances side by side during the copy. Runbook: [docs/database-migration.md](docs/database-migration.md).
+
 ### Helper Scripts
 
 | Script | Purpose |
@@ -212,6 +216,7 @@ The stack is designed for minimal cost:
 | `sf-metadata/deploy.sh` | Deploy Salesforce metadata (custom object + External Client App) |
 | `build-and-push.sh` | Build Docker image and push to ECR |
 | `db-tunnel.sh` | SSM tunnel to RDS via bastion (auto-starts both) |
+| `db-migrate.sh` | Copy the database to a new RDS instance (runs on the bastion, see [docs/database-migration.md](docs/database-migration.md)) |
 | `toggle-gui.sh` | Enable/disable GUI resources in CloudFormation |
 | `start-web.sh` | Run GUI locally (requires tunnel) |
 

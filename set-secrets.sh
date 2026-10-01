@@ -69,7 +69,12 @@ echo "  /${STACK_PREFIX}/salesforce/client-secret"
 # Update RDS master password (unless --skip-rds)
 if [ "$SKIP_RDS" = false ]; then
   echo
-  DB_INSTANCE="${STACK_PREFIX}-db"
+  # The stack knows the active instance (a migrated stack uses a suffixed identifier); fall back to the default name
+  DB_INSTANCE=$(aws cloudformation describe-stacks --stack-name "$STACK_PREFIX" --region "$AWS_REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='RDSInstanceIdentifier'].OutputValue" --output text 2>/dev/null || true)
+  if [ -z "$DB_INSTANCE" ] || [ "$DB_INSTANCE" = "None" ]; then
+    DB_INSTANCE="${STACK_PREFIX}-db"
+  fi
   if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" --region "$AWS_REGION" &>/dev/null; then
     aws rds modify-db-instance \
       --db-instance-identifier "$DB_INSTANCE" \

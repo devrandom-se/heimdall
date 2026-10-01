@@ -42,6 +42,41 @@ Parameters:
     MaxValue: 1000
     Description: Database storage in GB
 
+  DBMaxAllocatedStorage:
+    Type: Number
+    Default: 150
+    MinValue: 20
+    MaxValue: 1000
+    Description: "Storage autoscaling cap in GB for the database (must be >= DBAllocatedStorage)"
+
+  DBInstanceSuffix:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[a-z0-9-]{0,20}$"
+    Description: "Suffix appended to the database identifier <stack>-db. Set when migrating to a new instance; changing it on an existing stack REPLACES the database"
+
+  DBKmsKeyId:
+    Type: String
+    Default: ""
+    Description: "KMS key (ID or ARN) for database encryption at rest. Empty = AWS managed key aws/rds"
+
+  # Database migration (see docs/database-migration.md). The defaults are right for new installs.
+  LegacyDatabase:
+    Type: String
+    Default: none
+    AllowedValues:
+      - none
+      - keep
+    Description: "keep = retain the pre-migration DBInstance resource while its data is copied to the new instance. none = no legacy instance (new installs, or migration finished: the legacy instance is deleted with a final snapshot)"
+
+  ActiveDatabase:
+    Type: String
+    Default: new
+    AllowedValues:
+      - new
+      - legacy
+    Description: "Which database the tasks, IAM policies and outputs point at during a migration (legacy requires LegacyDatabase=keep)"
+
   # ECS Configuration
   BackupTaskCpu:
     Type: String
@@ -120,6 +155,15 @@ Parameters:
       - "true"
       - "false"
     Description: Enable bastion EC2 instance for SSM port forwarding to RDS
+
+  BastionInstanceType:
+    Type: String
+    Default: t4g.nano
+    AllowedValues:
+      - t4g.nano
+      - t4g.small
+      - t4g.medium
+    Description: "Bastion instance type. t4g.nano for tunnelling; t4g.medium for a database migration day (bandwidth)"
 
   EnableGui:
     Type: String
@@ -267,8 +311,12 @@ Resources:
       DBSubnetGroupName: !Sub ${AWS::StackName}-db-subnet-group
       SubnetIds: !Ref SubnetIds
 
+  # Pre-migration database. Exists only while LegacyDatabase=keep (stacks created before
+  # encryption/autoscaling were added); its properties must stay exactly as they were so
+  # CloudFormation never touches it. See docs/database-migration.md.
   DBInstance:
     Type: AWS::RDS::DBInstance
+    Condition: LegacyDatabaseKept
     Properties:
       DBInstanceIdentifier: !Sub ${AWS::StackName}-db
       DBName: heimdall
@@ -287,6 +335,32 @@ Resources:
       DeletionProtection: false
       EnablePerformanceInsights: false
     DeletionPolicy: Snapshot
+
+  # The database: encrypted at rest, storage autoscaling up to DBMaxAllocatedStorage.
+  Database:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-db${DBInstanceSuffix}
+      DBName: heimdall
+      Engine: postgres
+      EngineVersion: "15"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      MaxAllocatedStorage: !Ref DBMaxAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !If [HasDBKmsKey, !Ref DBKmsKeyId, !Ref AWS::NoValue]
+      MasterUsername: heimdall
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      DeletionProtection: true
+      EnablePerformanceInsights: false
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
 
   #############################################
   # ECR Repository
@@ -384,6 +458,7 @@ Resources:
                   - rds:StopDBInstance
                 Resource:
                   - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db
+                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db${DBInstanceSuffix}
 
   #############################################
   # ECS Cluster & Task Definition
@@ -440,11 +515,14 @@ Resources:
             - Name: AWS_S3_REGION
               Value: !Ref AWS::Region
             - Name: POSTGRES_URL
-              Value: !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/heimdall
+              Value: !If
+                - UseLegacyDatabase
+                - !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/heimdall
+                - !Sub jdbc:postgresql://${Database.Endpoint.Address}:${Database.Endpoint.Port}/heimdall
             - Name: POSTGRES_USERNAME
               Value: heimdall
             - Name: RDS_INSTANCE_IDENTIFIER
-              Value: !Sub ${AWS::StackName}-db
+              Value: !If [UseLegacyDatabase, !Sub "${AWS::StackName}-db", !Ref Database]
             - Name: HEIMDALL_API_LIMIT_STOP_AT_PERCENT
               Value: "50"
             - Name: HEIMDALL_RETENTION_CLEANUP_ENABLED
@@ -559,11 +637,14 @@ Resources:
             - Name: AWS_S3_REGION
               Value: !Ref AWS::Region
             - Name: POSTGRES_URL
-              Value: !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/heimdall
+              Value: !If
+                - UseLegacyDatabase
+                - !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/heimdall
+                - !Sub jdbc:postgresql://${Database.Endpoint.Address}:${Database.Endpoint.Port}/heimdall
             - Name: POSTGRES_USERNAME
               Value: heimdall
             - Name: RDS_INSTANCE_IDENTIFIER
-              Value: !Sub ${AWS::StackName}-db
+              Value: !If [UseLegacyDatabase, !Sub "${AWS::StackName}-db", !Ref Database]
             - Name: HEIMDALL_RESTORE_SANDBOX_NAME
               Value: ""
             - Name: HEIMDALL_RESTORE_SANDBOX_USERNAME
@@ -749,7 +830,7 @@ Resources:
     Type: AWS::EC2::Instance
     Condition: BastionEnabled
     Properties:
-      InstanceType: t4g.nano
+      InstanceType: !Ref BastionInstanceType
       ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}"
       IamInstanceProfile: !Ref BastionInstanceProfile
       NetworkInterfaces:
@@ -831,6 +912,7 @@ Resources:
                   - rds:DescribeDBInstances
                 Resource:
                   - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db
+                  - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db${DBInstanceSuffix}
               - Effect: Allow
                 Action:
                   - cloudformation:DescribeStacks
@@ -841,6 +923,12 @@ Conditions:
   ScheduleEnabled: !Equals [!Ref EnableScheduledBackup, "true"]
   BastionEnabled: !Equals [!Ref EnableBastion, "true"]
   GuiEnabled: !Equals [!Ref EnableGui, "true"]
+  LegacyDatabaseKept: !Equals [!Ref LegacyDatabase, "keep"]
+  # The legacy branch is only selectable while the legacy resource exists
+  UseLegacyDatabase: !And
+    - !Equals [!Ref ActiveDatabase, "legacy"]
+    - !Equals [!Ref LegacyDatabase, "keep"]
+  HasDBKmsKey: !Not [!Equals [!Ref DBKmsKeyId, ""]]
 
 Outputs:
   BackupBucketName:
@@ -850,10 +938,17 @@ Outputs:
       Name: !Sub ${AWS::StackName}-backup-bucket
 
   RDSEndpoint:
-    Description: RDS PostgreSQL endpoint
-    Value: !Sub ${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}
+    Description: RDS PostgreSQL endpoint (of the active database)
+    Value: !If
+      - UseLegacyDatabase
+      - !Sub ${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}
+      - !Sub ${Database.Endpoint.Address}:${Database.Endpoint.Port}
     Export:
       Name: !Sub ${AWS::StackName}-rds-endpoint
+
+  RDSInstanceIdentifier:
+    Description: RDS instance identifier of the active database
+    Value: !If [UseLegacyDatabase, !Sub "${AWS::StackName}-db", !Ref Database]
 
   ECRRepositoryUri:
     Description: ECR repository URI
