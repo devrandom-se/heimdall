@@ -69,12 +69,32 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
-            <version>2.20.26</version>
+            <version>2.46.7</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>rds</artifactId>
-            <version>2.20.26</version>
+            <version>2.46.7</version>
+        </dependency>
+        <!-- Pin HTTP client versions above what spring-boot-starter-parent's dependency
+             management provides (httpclient5 5.3.1 / httpcore5 5.2.5), since AWS SDK
+             2.46.7's default apache5-client requires newer versions at runtime.
+             Spring Boot's own BOM otherwise wins over the AWS SDK's transitive
+             dependency management, even when importing the AWS SDK BOM directly. -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.6.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.core5</groupId>
+            <artifactId>httpcore5</artifactId>
+            <version>5.4.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.core5</groupId>
+            <artifactId>httpcore5-h2</artifactId>
+            <version>5.4.2</version>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
