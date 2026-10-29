@@ -4,6 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="_csrf" th:if="${_csrf}" th:content="${_csrf.token}">
+    <meta name="_csrf_header" th:if="${_csrf}" th:content="${_csrf.headerName}">
     <title th:text="${pageTitle} ? ${pageTitle} + ' - Heimdall' : 'Heimdall'">Heimdall</title>
     <!-- Salesforce Lightning Design System -->
     <link rel="stylesheet" href="https://unpkg.com/@salesforce-ux/design-system@2.24.3/assets/styles/salesforce-lightning-design-system.min.css">
@@ -48,6 +50,23 @@
         .rm-step-group { display: flex; flex-direction: column; align-items: center; }
         .rm-step-label { font-size: 0.7rem; color: #706e6b; margin-top: 0.25rem; }
     </style>
+    <script>
+        // Send the CSRF token with every same-origin request that changes state
+        (function() {
+            var tokenMeta = document.querySelector('meta[name="_csrf"]');
+            var headerMeta = document.querySelector('meta[name="_csrf_header"]');
+            if (!tokenMeta || !headerMeta) return;
+            var originalFetch = window.fetch;
+            window.fetch = function(input, init) {
+                var request = new Request(input, init);
+                var safe = ['GET', 'HEAD', 'OPTIONS', 'TRACE'].indexOf(request.method) !== -1;
+                if (!safe && new URL(request.url).origin === window.location.origin) {
+                    request.headers.set(headerMeta.content, tokenMeta.content);
+                }
+                return originalFetch.call(window, request);
+            };
+        })();
+    </script>
 </head>
 <body>
     <!-- Header -->

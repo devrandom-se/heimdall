@@ -117,6 +117,8 @@ Or use the helper script:
 ./start-web.sh
 ```
 
+> **Security:** the GUI has no login of its own yet. Anyone who can reach it can browse backed-up data, download files and restore records to the sandbox. Keep it on `localhost`, or put it behind an authenticating proxy. The CloudFormation stack does this with an ALB and Cognito. Never expose port 8080 directly to a network.
+
 ## AWS Deployment
 
 ### 1. Deploy Salesforce Metadata
@@ -286,8 +288,10 @@ docker build -t heimdall .
 docker run --env-file .env heimdall
 
 # Run GUI
-docker run --env-file .env -e SPRING_PROFILES_ACTIVE=web -p 8080:8080 heimdall
+docker run --env-file .env -e SPRING_PROFILES_ACTIVE=web -p 127.0.0.1:8080:8080 heimdall
 ```
+
+The GUI has no login of its own, so the example binds it to `127.0.0.1`. See the security note under [Run Restore GUI](#4-run-restore-gui).
 
 ## Storage Layout
 
