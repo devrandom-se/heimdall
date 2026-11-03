@@ -17,14 +17,14 @@
  */
 package se.devrandom.heimdall.batchprocessing;
 
-import org.springframework.batch.core.Job;
-import org.springframework.batch.core.Step;
+import org.springframework.batch.core.job.Job;
+import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.job.builder.JobBuilder;
-import org.springframework.batch.core.launch.support.RunIdIncrementer;
+import org.springframework.batch.core.job.parameters.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.support.CompositeItemProcessor;
+import org.springframework.batch.infrastructure.item.ItemProcessor;
+import org.springframework.batch.infrastructure.item.support.CompositeItemProcessor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -115,9 +115,9 @@ public class BatchConfiguration {
                 .reader(getDescribeGlobalResultIO())
                 .processor(compositeProcessor())
                 .writer(getDescribeSObjectResultIO())
-                // Lägg till parallellitet här
+                // Lägg till parallellitet här. Spring Batch 6 removed throttleLimit();
+                // its built-in limit is 4, the same as the executor's concurrency limit.
                 .taskExecutor(taskExecutor)
-                .throttleLimit(4)
                 .build();
     }
 }

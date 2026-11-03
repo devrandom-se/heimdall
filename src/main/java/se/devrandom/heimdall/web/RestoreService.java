@@ -17,8 +17,6 @@
  */
 package se.devrandom.heimdall.web;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.annotation.PostConstruct;
@@ -30,6 +28,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import se.devrandom.heimdall.storage.RdsLifecycleService;
 import se.devrandom.heimdall.storage.S3Service;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.sql.*;
 import java.time.Month;
@@ -40,7 +41,7 @@ import java.util.*;
 public class RestoreService {
 
     private static final Logger log = LoggerFactory.getLogger(RestoreService.class);
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.builder().build();
 
     @Autowired
     private S3Service s3Service;
@@ -730,7 +731,7 @@ public class RestoreService {
         if (metadataJson == null) return null;
         try {
             Map<String, Object> meta = objectMapper.readValue(
-                metadataJson, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                metadataJson, new TypeReference<Map<String, Object>>() {});
             for (Map.Entry<String, Object> entry : meta.entrySet()) {
                 if (entry.getValue() != null && recordId.equals(String.valueOf(entry.getValue()))) {
                     return entry.getKey();

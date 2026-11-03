@@ -17,7 +17,7 @@
  */
 package se.devrandom.heimdall.salesforce;
 
-import org.springframework.lang.NonNull;
+import org.jspecify.annotations.NonNull;
 
 import java.util.List;
 

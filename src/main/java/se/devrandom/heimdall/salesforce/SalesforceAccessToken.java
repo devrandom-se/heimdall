@@ -17,7 +17,7 @@
  */
 package se.devrandom.heimdall.salesforce;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import org.springframework.lang.NonNull;
+import org.jspecify.annotations.NonNull;
 
 /**
  * OAuth token response from Salesforce. The JSON names are given per field with
