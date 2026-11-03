@@ -12,7 +12,7 @@ salesforce.audience-url=https://login.salesforce.com
 salesforce.api-version=v61.0
 salesforce.org-id=YOUR_ORG_ID
 
-spring.codec.max-in-memory-size=20MB
+spring.http.codecs.max-in-memory-size=20MB
 
 # AWS S3 Configuration
 aws.s3.bucket-name=heimdall-salesforce-backups

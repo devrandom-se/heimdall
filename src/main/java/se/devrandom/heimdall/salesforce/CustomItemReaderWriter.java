@@ -19,9 +19,9 @@ package se.devrandom.heimdall.salesforce;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.batch.item.Chunk;
-import org.springframework.batch.item.ItemReader;
-import org.springframework.batch.item.ItemWriter;
+import org.springframework.batch.infrastructure.item.Chunk;
+import org.springframework.batch.infrastructure.item.ItemReader;
+import org.springframework.batch.infrastructure.item.ItemWriter;
 import se.devrandom.heimdall.salesforce.objects.Heimdall_Backup_Config__c;
 
 import java.util.ArrayList;

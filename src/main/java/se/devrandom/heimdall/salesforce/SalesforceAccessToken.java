@@ -16,23 +16,31 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package se.devrandom.heimdall.salesforce;
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.fasterxml.jackson.databind.annotation.JsonNaming;
-import org.springframework.lang.NonNull;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.NonNull;
 
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+/**
+ * OAuth token response from Salesforce. The JSON names are given per field with
+ * {@code @JsonProperty} (from jackson-annotations, which Jackson 2 and Jackson 3 share)
+ * rather than with a databind naming strategy, so the mapping doesn't depend on which
+ * Jackson version Spring's codecs use.
+ */
 public class SalesforceAccessToken {
     @NonNull
+    @JsonProperty("access_token")
     public String accessToken;
     @NonNull
+    @JsonProperty("instance_url")
     public String instanceUrl;
     @NonNull
     public String id;
     @NonNull
+    @JsonProperty("token_type")
     public String tokenType;
     @NonNull
     public String scope;
     @NonNull
+    @JsonProperty("issued_at")
     public String issuedAt;
     @NonNull
     public String signature;
