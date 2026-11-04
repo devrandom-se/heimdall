@@ -17,11 +17,21 @@
  */
 package se.devrandom.heimdall.config;
 
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
 
 @Configuration
 @EnableWebSecurity
@@ -31,11 +41,32 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                // Allow all requests for now (OAuth will be added later)
+                // No in-app login yet: the GUI must run behind an authenticating proxy
+                // (the CloudFormation stack uses an ALB with Cognito). See README.
                 .anyRequest().permitAll()
             )
-            .csrf(csrf -> csrf.disable()); // Disable CSRF for API endpoints
+            // Cookie-backed tokens keep CSRF stateless, so it works with several GUI tasks
+            // behind the ALB. layout.html exposes the token in meta tags and adds it as a
+            // header to every mutating fetch call.
+            .csrf(csrf -> csrf.csrfTokenRepository(new CookieCsrfTokenRepository()))
+            .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class);
 
         return http.build();
+    }
+
+    /**
+     * Loads the deferred CSRF token on every request so the cookie is written before
+     * the view starts rendering (and possibly commits the response).
+     */
+    static final class CsrfCookieFilter extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                        FilterChain filterChain) throws ServletException, IOException {
+            CsrfToken csrfToken = (CsrfToken) request.getAttribute(CsrfToken.class.getName());
+            if (csrfToken != null) {
+                csrfToken.getToken();
+            }
+            filterChain.doFilter(request, response);
+        }
     }
 }

@@ -18,6 +18,7 @@ Last reviewed: 2026-09-02, after a full code review at commit `316c0ad`.
 - Salesforce metadata auto-migration of `Heimdall_Backup_Config__c`
 - RDS on-demand lifecycle (start before the job, stop after)
 - One-command AWS deployment: ECS Fargate, RDS, S3, optional GUI behind ALB + Cognito, optional bastion
+- CSRF protection on the GUI, with tokens sent by the fetch calls
 - Testcontainers integration tests for storage, retention and restore
 
 ## Now: reliability and trust
@@ -56,7 +57,6 @@ The 2026 storage-full incident showed that Heimdall backs up well but cannot yet
 
 ### GUI security
 
-- CSRF protection on, with tokens sent by the fetch calls
 - Escape record data correctly in the restore form (DOM APIs, no inline event handlers)
 - Validate object names and record IDs at the controller boundary before they reach SOQL
 - Refresh the sandbox session on 401 and apply timeouts to the sandbox client
