@@ -17,8 +17,6 @@
  */
 package se.devrandom.heimdall.web;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Jwts;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -34,6 +32,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import se.devrandom.heimdall.salesforce.SalesforceAccessToken;
 import se.devrandom.heimdall.salesforce.objects.DescribeSObjectResult;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -80,8 +81,9 @@ public class SandboxRestoreClient {
     private String instanceUrl;
     private String accessToken;
     private boolean configured;
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private final ObjectMapper objectMapper = JsonMapper.builder()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build();
     private final ConcurrentHashMap<String, DescribeSObjectResult> describeCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> keyPrefixCache = new ConcurrentHashMap<>();
 
@@ -337,7 +339,7 @@ public class SandboxRestoreClient {
     private RestoreResult updateRecord(String objectName, String recordId, Map<String, Object> fields) {
         String url = instanceUrl + "/services/data/" + apiVersion + "/sobjects/" + objectName + "/" + recordId;
         try {
-            String jsonPayload = new com.fasterxml.jackson.databind.ObjectMapper()
+            String jsonPayload = objectMapper
                     .writerWithDefaultPrettyPrinter().writeValueAsString(fields);
             log.debug("PATCH {} {} payload ({} fields):\n{}", objectName, recordId, fields.size(), jsonPayload);
 
@@ -369,18 +371,18 @@ public class SandboxRestoreClient {
 
             // Use exchangeToMono to handle all response codes ourselves
             // (Salesforce may return 400 for DUPLICATES_DETECTED even with allowSave header)
-            org.springframework.web.reactive.function.client.ClientResponse clientResponse = webClient.post()
+            org.springframework.http.ResponseEntity<String> entity = webClient.post()
                     .uri(url)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
                     .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                     .header("Sforce-Duplicate-Rule-Header", "allowSave=true")
                     .accept(MediaType.APPLICATION_JSON)
                     .bodyValue(fields)
-                    .exchange()
+                    .exchangeToMono(clientResponse -> clientResponse.toEntity(String.class))
                     .block();
 
-            String responseJson = clientResponse.bodyToMono(String.class).block();
-            int statusCode = clientResponse.statusCode().value();
+            String responseJson = entity.getBody();
+            int statusCode = entity.getStatusCode().value();
             log.debug("POST {} response (HTTP {}): {}", objectName, statusCode, responseJson);
 
             if (statusCode >= 200 && statusCode < 300) {

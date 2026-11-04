@@ -1,7 +1,7 @@
 package se.devrandom.heimdall.batchprocessing;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.batch.repeat.RepeatStatus;
+import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import se.devrandom.heimdall.web.RetentionService;
 
 import java.time.LocalDate;
